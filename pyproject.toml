@@ -1,0 +1,57 @@
+[project]
+name = "rm-agent"
+version = "0.1.0"
+description = "Agentic AI FastAPI assistant for relationship managers."
+readme = "README.md"
+authors = [
+    { name = "ravurumanoj", email = "ravurumanojkld@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.141.1",
+    "langchain-core>=1.6.2",
+    "langgraph>=1.2.11",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "psycopg[binary]>=3.3.5",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.3",
+    "sqlalchemy>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[project.scripts]
+rm-agent = "rm_agent:main"
+
+[project.optional-dependencies]
+unique = [
+    "unique-sdk>=2026.36.2",
+]
+openai = [
+    "langchain-openai>=1.6.1",
+]
+gemini = [
+    "langchain-google-genai>=4.4.0",
+]
+phoenix = [
+    "arize-phoenix>=8.0.0",
+    "openinference-instrumentation-langchain>=0.1.30",
+    "opentelemetry-exporter-otlp>=1.38.0",
+    "opentelemetry-sdk>=1.38.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.8,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

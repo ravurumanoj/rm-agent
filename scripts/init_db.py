@@ -1,0 +1,7 @@
+"""One-off DB bootstrap script — run with `python scripts/init_db.py`."""
+
+from app.db.session import init_db
+
+if __name__ == "__main__":
+    init_db()
+    print("Database initialised.")
