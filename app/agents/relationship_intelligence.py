@@ -76,6 +76,89 @@ class RelationshipIntelligenceAgent(BaseAgent):
 
         return [("", tool_args)]
 
+    @classmethod
+    async def _invoke_tool_with_scoping(
+        cls,
+        tool: Any,
+        raw_args: dict[str, Any],
+        selected_portfolio_ids: list[str],
+    ) -> Any:
+        scoped_calls = cls._build_scoped_tool_args(tool, raw_args, selected_portfolio_ids)
+        if len(scoped_calls) == 1:
+            _pid, scoped_args = scoped_calls[0]
+            return await tool.ainvoke(scoped_args)
+
+        by_id: dict[str, Any] = {}
+        merged_chunks: list[dict[str, Any]] = []
+        for portfolio_id, scoped_args in scoped_calls:
+            item = await tool.ainvoke(scoped_args)
+            by_id[portfolio_id] = item
+            if isinstance(item, dict) and isinstance(item.get("chunks"), list):
+                merged_chunks.extend([c for c in item.get("chunks", []) if isinstance(c, dict)])
+        return {
+            "portfolio_ids": selected_portfolio_ids,
+            "results_by_portfolio_id": by_id,
+            "chunks": merged_chunks,
+        }
+
+    @staticmethod
+    def _has_effective_results(tool_results: dict[str, Any]) -> bool:
+        def _result_has_data(value: Any) -> bool:
+            if isinstance(value, dict):
+                if value.get("error"):
+                    return False
+                chunks = value.get("chunks")
+                if isinstance(chunks, list) and bool(chunks):
+                    return True
+                nested = value.get("results_by_portfolio_id")
+                if isinstance(nested, dict):
+                    return any(_result_has_data(item) for item in nested.values())
+                if value.get("data") not in (None, {}, []):
+                    return True
+                return False
+            return value is not None
+
+        if not isinstance(tool_results, dict) or not tool_results:
+            return False
+        for value in tool_results.values():
+            if _result_has_data(value):
+                return True
+        return False
+
+    async def _apply_deterministic_fallback(
+        self,
+        tools: list[Any],
+        selected_portfolio_ids: list[str],
+        tool_results: dict[str, Any],
+        tools_called: list[str],
+        chunks: list[dict[str, Any]],
+    ) -> None:
+        logger.warning(
+            "[CRM] deterministic_fallback_triggered selected_ids=%s tools=%s",
+            selected_portfolio_ids,
+            [getattr(t, "name", "") for t in tools],
+        )
+        for tool in tools:
+            name = getattr(tool, "name", "")
+            if not name:
+                continue
+            try:
+                result = await self._invoke_tool_with_scoping(tool, {}, selected_portfolio_ids)
+            except Exception as exc:
+                result = {"error": str(exc)}
+            tool_results[name] = result
+            if name not in tools_called:
+                tools_called.append(name)
+            if isinstance(result, dict) and isinstance(result.get("chunks"), list):
+                chunks.extend([c for c in result.get("chunks", []) if isinstance(c, dict)])
+            has_error = isinstance(result, dict) and bool(result.get("error"))
+            logger.debug(
+                "[CRM] fallback_tool_call name=%s error=%s chunk_count=%s",
+                name,
+                result.get("error") if has_error else None,
+                len(result.get("chunks") or []) if isinstance(result, dict) else 0,
+            )
+
     async def collect_data(self, state: AgentState, *, extra_context: str = "") -> dict[str, Any]:
         injected = extract_injected_domain_results(
             state,
@@ -89,10 +172,17 @@ class RelationshipIntelligenceAgent(BaseAgent):
         metadata = state.get("metadata") or {}
         tools = metadata.get("crm_tools") or []
         if not isinstance(tools, list) or not tools:
+            logger.warning("[CRM] no_crm_tools_configured_in_metadata")
             return {"tool_results": {}, "tools_called": [], "chunks": []}
 
         user_msg = (state.get("user_message") or "").strip()
         selected_portfolio_ids = [str(x).strip() for x in (state.get("selected_portfolio_ids") or []) if str(x).strip()]
+        logger.info(
+            "[CRM] collect_data_started selected_ids=%s available_tools=%s extra_context=%r",
+            selected_portfolio_ids,
+            [getattr(t, "name", "") for t in tools],
+            extra_context[:200] if extra_context else "",
+        )
 
         additional_context = "Portfolio-centric retrieval mode for CRM insights."
         if selected_portfolio_ids:
@@ -120,9 +210,19 @@ class RelationshipIntelligenceAgent(BaseAgent):
         tool_map = {getattr(t, "name", ""): t for t in tools if getattr(t, "name", "")}
 
         for _ in range(max(1, settings.MCP_MAX_TOOL_ITERATIONS)):
-            ai = await llm_with_tools.ainvoke(messages)
-            if not getattr(ai, "tool_calls", None):
+            try:
+                ai = await llm_with_tools.ainvoke(messages)
+            except Exception as exc:
+                logger.warning("[CRM] tool_planning_failed error=%s", exc)
                 break
+            if not getattr(ai, "tool_calls", None):
+                logger.debug("[CRM] llm_requested_no_tool_calls")
+                break
+            logger.debug(
+                "[CRM] llm_requested_tool_calls count=%s names=%s",
+                len(ai.tool_calls),
+                [tc.get("name") for tc in ai.tool_calls],
+            )
             messages.append(ai)
 
             async def _call(tc: dict[str, Any]):
@@ -130,32 +230,26 @@ class RelationshipIntelligenceAgent(BaseAgent):
                 call_id = tc.get("id", "") or name
                 tool = tool_map.get(name)
                 if tool is None:
+                    logger.warning("[CRM] tool_not_found name=%s", name)
                     return name, call_id, {"error": f"Tool '{name}' not found"}
 
                 raw_args = tc.get("args") or {}
                 if not isinstance(raw_args, dict):
                     raw_args = {}
-                scoped_calls = self._build_scoped_tool_args(tool, raw_args, selected_portfolio_ids)
 
                 try:
-                    if len(scoped_calls) == 1:
-                        _pid, scoped_args = scoped_calls[0]
-                        result = await tool.ainvoke(scoped_args)
-                    else:
-                        by_id: dict[str, Any] = {}
-                        merged_chunks: list[dict[str, Any]] = []
-                        for portfolio_id, scoped_args in scoped_calls:
-                            item = await tool.ainvoke(scoped_args)
-                            by_id[portfolio_id] = item
-                            if isinstance(item, dict) and isinstance(item.get("chunks"), list):
-                                merged_chunks.extend([c for c in item.get("chunks", []) if isinstance(c, dict)])
-                        result = {
-                            "portfolio_ids": selected_portfolio_ids,
-                            "results_by_portfolio_id": by_id,
-                            "chunks": merged_chunks,
-                        }
+                    result = await self._invoke_tool_with_scoping(tool, raw_args, selected_portfolio_ids)
+                    has_error = isinstance(result, dict) and bool(result.get("error"))
+                    logger.debug(
+                        "[CRM] tool_call name=%s raw_args=%s error=%s chunk_count=%s",
+                        name,
+                        raw_args,
+                        result.get("error") if has_error else None,
+                        len(result.get("chunks") or []) if isinstance(result, dict) else 0,
+                    )
                     return name, call_id, result
                 except Exception as exc:
+                    logger.warning("[CRM] tool_call_exception name=%s error=%s", name, exc)
                     return name, call_id, {"error": str(exc)}
 
             results = await asyncio.gather(*[_call(tc) for tc in ai.tool_calls])
@@ -167,7 +261,22 @@ class RelationshipIntelligenceAgent(BaseAgent):
                     chunks.extend([c for c in result.get("chunks", []) if isinstance(c, dict)])
                 messages.append(ToolMessage(content=str(result), tool_call_id=call_id))
 
-        logger.info("CRM collector completed with %s tools", len(tools_called))
+        effective = self._has_effective_results(tool_results)
+        logger.debug("[CRM] effective_results_check result=%s tool_results_keys=%s", effective, list(tool_results.keys()))
+        if not effective:
+            await self._apply_deterministic_fallback(
+                tools,
+                selected_portfolio_ids,
+                tool_results,
+                tools_called,
+                chunks,
+            )
+
+        logger.info(
+            "[CRM] collect_data_completed tools_called=%s chunk_count=%s",
+            tools_called,
+            len(chunks),
+        )
         return {"tool_results": tool_results, "tools_called": tools_called, "chunks": chunks}
 
 

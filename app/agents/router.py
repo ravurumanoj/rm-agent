@@ -68,6 +68,7 @@ class RouterAgent(BaseAgent):
             result = await self.llm.ainvoke(msgs)
             raw = extract_text(result.content).strip().lower().rstrip(".")
             candidate = raw.split()[0] if raw.split() else ""
+            logger.debug("[ROUTER] llm_classify raw_output=%r candidate=%r", raw[:200], candidate)
 
             if candidate in VALID_ROUTES:
                 return candidate
@@ -106,6 +107,7 @@ class RouterAgent(BaseAgent):
             mode = str(data.get("execution_mode", "")).strip().lower()
             producer = data.get("producer")
             producer = str(producer).strip().lower() if producer else None
+            logger.debug("[ROUTER] plan_execution raw_data=%s mode=%s producer=%s", data, mode, producer)
 
             if mode not in VALID_EXEC_MODES:
                 return EXEC_MODE_PARALLEL, None
@@ -145,11 +147,15 @@ class RouterAgent(BaseAgent):
         has_portfolio = any(token in words for token in ["portfolio", "holding", "holdings", "aum", "performance", "allocation", "risk", "return"])
         has_crm = any(token in words for token in ["crm", "meeting", "meetings", "call", "followup", "follow-up", "interaction", "action", "client"])
         if has_portfolio and has_crm:
+            logger.debug("[ROUTER] heuristic_route=both has_portfolio=%s has_crm=%s", has_portfolio, has_crm)
             return ROUTE_BOTH
         if has_portfolio:
+            logger.debug("[ROUTER] heuristic_route=portfolio_only")
             return ROUTE_PORTFOLIO_ONLY
         if has_crm:
+            logger.debug("[ROUTER] heuristic_route=crm_only")
             return ROUTE_CRM_ONLY
+        logger.debug("[ROUTER] heuristic_route=general")
         return ROUTE_GENERAL
 
 

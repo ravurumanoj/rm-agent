@@ -24,15 +24,61 @@ _AGENT_REGISTRY = {
 }
 
 
+def has_effective_external_tool_outputs(tool_outputs: list[dict[str, Any]]) -> bool:
+    """True if externally supplied tool_outputs contain usable (non-error) data."""
+    if not tool_outputs:
+        return False
+    for item in tool_outputs:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("chunks"), list) and bool(item.get("chunks")):
+            logger.debug("[EXEC] external_tool_outputs_effective via chunks tool=%s", item.get("tool"))
+            return True
+        result = item.get("result")
+        if isinstance(result, dict) and result.get("error"):
+            result = None
+        if result not in (None, {}, []):
+            logger.debug("[EXEC] external_tool_outputs_effective via result tool=%s", item.get("tool"))
+            return True
+        content = item.get("content")
+        if content not in (None, "", {}, []):
+            logger.debug("[EXEC] external_tool_outputs_effective via content tool=%s", item.get("tool"))
+            return True
+    logger.debug("[EXEC] external_tool_outputs_not_effective count=%s", len(tool_outputs))
+    return False
+
+
+# Backward-compatible internal alias.
+_has_effective_legacy_tool_outputs = has_effective_external_tool_outputs
+
+
 def _has_effective_tool_results(output: dict[str, Any] | None) -> bool:
+    def _result_has_data(value: Any) -> bool:
+        if isinstance(value, dict):
+            if value.get("error"):
+                return False
+
+            chunks = value.get("chunks")
+            if isinstance(chunks, list) and bool(chunks):
+                return True
+
+            nested = value.get("results_by_portfolio_id")
+            if isinstance(nested, dict):
+                return any(_result_has_data(item) for item in nested.values())
+
+            if value.get("data") not in (None, {}, []):
+                return True
+
+            return False
+        return value is not None
+
     results = (output or {}).get("tool_results")
     if not isinstance(results, dict) or not results:
         return False
 
     for value in results.values():
-        if isinstance(value, dict) and value.get("error"):
-            continue
-        return True
+        if _result_has_data(value):
+            return True
     return False
 
 
@@ -162,8 +208,16 @@ async def execute_agents(
         producer,
     )
 
-    legacy_tool_outputs = state.get("tool_outputs", [])
-    if isinstance(legacy_tool_outputs, list) and legacy_tool_outputs:
+    # Only request-supplied tool_outputs bypass execution; internal flattened
+    # results (written back into state["tool_outputs"] after each attempt) must
+    # never be mistaken for external input, or replan retries would just replay
+    # the previous (possibly insufficient) result instead of re-fetching.
+    legacy_tool_outputs = state.get("external_tool_outputs", [])
+    if (
+        isinstance(legacy_tool_outputs, list)
+        and legacy_tool_outputs
+        and _has_effective_legacy_tool_outputs(legacy_tool_outputs)
+    ):
         logger.info("[EXEC] using_legacy_tool_outputs count=%s", len(legacy_tool_outputs))
         return {
             "tool_outputs": legacy_tool_outputs,
@@ -182,11 +236,20 @@ async def execute_agents(
         and producer in _AGENT_REGISTRY
         and both_present
     ):
+        logger.debug("[EXEC] dispatch_mode=sequential targets=%s producer=%s", sorted(run_targets), producer)
         outputs = await _run_sequential(state, producer, replan_instruction=replan_instruction)
     else:
+        logger.debug("[EXEC] dispatch_mode=parallel targets=%s", sorted(run_targets))
         outputs = await _run_parallel(state, run_targets, replan_instruction=replan_instruction)
 
     flattened = _flatten_outputs_to_tool_items(outputs)
+    logger.debug(
+        "[EXEC] flattened_tool_items=%s",
+        [
+            {"domain": item.get("domain"), "tool": item.get("tool"), "chunk_count": len(item.get("chunks") or [])}
+            for item in flattened
+        ],
+    )
     logger.info(
         "[EXEC] execute_completed route=%s tool_items=%s",
         active_route,
@@ -209,18 +272,36 @@ def evaluate_sufficiency_for_route(
     missing_desc: list[str] = []
     missing_targets: set[str] = set()
 
-    if needs_portfolio and not (portfolio_output or {}).get("tool_results"):
+    portfolio_has_results = bool((portfolio_output or {}).get("tool_results"))
+    portfolio_effective = _has_effective_tool_results(portfolio_output) if portfolio_has_results else False
+    if needs_portfolio and not portfolio_has_results:
         missing_desc.append("portfolio data")
         missing_targets.add(AGENT_PORTFOLIO)
-    elif needs_portfolio and not _has_effective_tool_results(portfolio_output):
+    elif needs_portfolio and not portfolio_effective:
         missing_desc.append("portfolio data")
         missing_targets.add(AGENT_PORTFOLIO)
-    if needs_crm and not (crm_output or {}).get("tool_results"):
+
+    crm_has_results = bool((crm_output or {}).get("tool_results"))
+    crm_effective = _has_effective_tool_results(crm_output) if crm_has_results else False
+    if needs_crm and not crm_has_results:
         missing_desc.append("CRM data")
         missing_targets.add(AGENT_CRM)
-    elif needs_crm and not _has_effective_tool_results(crm_output):
+    elif needs_crm and not crm_effective:
         missing_desc.append("CRM data")
         missing_targets.add(AGENT_CRM)
+
+    logger.debug(
+        "[EXEC] sufficiency_check route=%s needs_portfolio=%s portfolio_has_results=%s portfolio_effective=%s "
+        "needs_crm=%s crm_has_results=%s crm_effective=%s missing_targets=%s",
+        route,
+        needs_portfolio,
+        portfolio_has_results,
+        portfolio_effective,
+        needs_crm,
+        crm_has_results,
+        crm_effective,
+        sorted(missing_targets),
+    )
 
     return (not missing_targets, " and ".join(missing_desc), missing_targets)
 

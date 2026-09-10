@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from app.constants import ROUTE_BOTH, ROUTE_PORTFOLIO_ONLY
+from app.utils.logger import logger
 
 
 _PORTFOLIO_NEED_ROUTES = {ROUTE_PORTFOLIO_ONLY, ROUTE_BOTH}
@@ -59,21 +60,28 @@ def extract_portfolio_ids_from_query(user_message: str) -> list[str]:
     for pattern in _PORTFOLIO_QUERY_PATTERNS:
         for match in pattern.finditer(text):
             found.extend(_split_candidate_ids(match.group(1)))
-    return _dedupe_keep_order(found)
+    result = _dedupe_keep_order(found)
+    logger.debug("[PORTFOLIO_ID] extract_from_query text=%r found=%s", text[:200], result)
+    return result
 
 
 def _normalize_active_portfolio_ids(metadata: dict[str, Any]) -> list[str]:
     raw = (
         metadata.get("active_portfolios")
         or metadata.get("portfolio_ids")
+        or metadata.get("portfolio_id")
+        or metadata.get("portfolioId")
         or metadata.get("portfolios")
         or metadata.get("portfolio_scope")
+        or metadata.get("portfolio")
+        or metadata.get("id")
         or []
     )
 
     if isinstance(raw, str):
         stripped = raw.strip()
         if not stripped or stripped.lower() in {"(none specified)", "none", "n/a"}:
+            logger.debug("[PORTFOLIO_ID] normalize_active_ids empty_or_placeholder_string raw=%r", stripped)
             return []
         try:
             parsed = json.loads(stripped)
@@ -82,7 +90,9 @@ def _normalize_active_portfolio_ids(metadata: dict[str, Any]) -> list[str]:
         if isinstance(parsed, (list, dict)):
             raw = parsed
         else:
-            return _dedupe_keep_order(_split_candidate_ids(stripped))
+            result = _dedupe_keep_order(_split_candidate_ids(stripped))
+            logger.debug("[PORTFOLIO_ID] normalize_active_ids parsed_from_plain_string result=%s", result)
+            return result
 
     ids: list[str] = []
     if isinstance(raw, dict):
@@ -100,7 +110,28 @@ def _normalize_active_portfolio_ids(metadata: dict[str, Any]) -> list[str]:
                 if value and _ID_TOKEN_RE.match(value):
                     ids.append(value)
                     break
-    return _dedupe_keep_order(ids)
+    result = _dedupe_keep_order(ids)
+    logger.debug("[PORTFOLIO_ID] normalize_active_ids result=%s", result)
+    return result
+
+
+def _extract_known_ids_from_text(user_message: str, known_ids: list[str]) -> list[str]:
+    text = (user_message or "").strip()
+    if not text or not known_ids:
+        return []
+
+    selected: list[str] = []
+    for portfolio_id in known_ids:
+        pid = (portfolio_id or "").strip()
+        if not pid:
+            continue
+        # Use non-word boundaries so numeric IDs in natural text (e.g., "for 1111") are detected safely.
+        pattern = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(pid)}(?![A-Za-z0-9_-])", re.IGNORECASE)
+        if pattern.search(text):
+            selected.append(portfolio_id)
+    result = _dedupe_keep_order(selected)
+    logger.debug("[PORTFOLIO_ID] extract_known_ids_from_text known_ids=%s matched=%s", known_ids, result)
+    return result
 
 
 def _format_options(ids: list[str], *, max_items: int = 10) -> str:
@@ -114,6 +145,8 @@ def _format_options(ids: list[str], *, max_items: int = 10) -> str:
 def resolve_portfolio_context(user_message: str, metadata: dict[str, Any], route: str) -> dict[str, Any]:
     requested = extract_portfolio_ids_from_query(user_message)
     known_ids = _normalize_active_portfolio_ids(metadata)
+    if not requested and known_ids:
+        requested = _extract_known_ids_from_text(user_message, known_ids)
 
     selected: list[str] = []
     unknown: list[str] = []
@@ -168,6 +201,16 @@ def resolve_portfolio_context(user_message: str, metadata: dict[str, Any], route
             clarification_question = (
                 "Please provide the portfolio ID so I can fetch the correct portfolio details."
             )
+
+    logger.info(
+        "[PORTFOLIO_ID] resolve_portfolio_context route=%s requested=%s known=%s selected=%s unmatched=%s needs_clarification=%s",
+        route,
+        requested,
+        known_ids,
+        selected,
+        unknown,
+        needs_clarification,
+    )
 
     return {
         "requested_portfolio_ids": requested,

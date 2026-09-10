@@ -3,7 +3,7 @@
 from typing import Any
 
 from app.agents.clarification import clarification_agent
-from app.agents.execution import evaluate_sufficiency_for_route, execute_agents
+from app.agents.execution import evaluate_sufficiency_for_route, execute_agents, has_effective_external_tool_outputs
 from app.agents.query_details import resolve_portfolio_context
 from app.agents.router import router_agent
 from app.agents.synthesizer import synthesizer_agent
@@ -75,6 +75,7 @@ async def run_turn(
         "needs_portfolio_clarification": False,
         "portfolio_clarification_question": "",
         "tool_outputs": tool_outputs or [],
+        "external_tool_outputs": tool_outputs or [],
         "portfolio_output": {},
         "crm_output": {},
         "citation_references": [],
@@ -103,7 +104,11 @@ async def run_turn(
         state.get("selected_portfolio_ids", []),
     )
 
-    if state.get("needs_portfolio_clarification"):
+    # Deterministic tool_outputs supplied by the caller mean data is already
+    # fetched; skip clarification gates entirely since there is nothing to ask.
+    has_preloaded_data = has_effective_external_tool_outputs(state.get("external_tool_outputs") or [])
+
+    if state.get("needs_portfolio_clarification") and not has_preloaded_data:
         question = (
             state.get("portfolio_clarification_question")
             or "Please specify the portfolio ID you want me to use for this request."
@@ -117,7 +122,7 @@ async def run_turn(
         _persist_turn_state(session_id, message, state)
         return TurnResult(reply=question, citations=[], evaluations=[])
 
-    if state.get("route") in DATA_ROUTES:
+    if state.get("route") in DATA_ROUTES and not has_preloaded_data:
         state.update(await clarification_agent(state))
         if state.get("needs_clarification"):
             question = (state.get("clarification_question") or "").strip()

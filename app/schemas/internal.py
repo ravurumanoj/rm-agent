@@ -27,6 +27,7 @@ class AgentState(TypedDict, total=False):
     needs_portfolio_clarification: bool
     portfolio_clarification_question: str
     tool_outputs: list[dict[str, Any]]
+    external_tool_outputs: list[dict[str, Any]]
     portfolio_output: dict[str, Any]
     crm_output: dict[str, Any]
     citation_references: list[dict[str, Any]]

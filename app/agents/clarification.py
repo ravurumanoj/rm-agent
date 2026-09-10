@@ -46,6 +46,7 @@ class ClarificationAgent(BaseAgent):
             result = await self.llm.ainvoke(msgs)
             data = self._parse_json_object(extract_text(result.content))
             action = str(data.get("action", "")).strip().lower()
+            logger.debug("[CLARIFY] llm_decision raw_data=%s action=%s", data, action)
 
             if action not in VALID_CLARIFY_ACTIONS:
                 return ClarificationDecision(action=CLARIFY_PROCEED)
@@ -89,6 +90,12 @@ async def clarification_agent(state: AgentState) -> dict:
         unmatched_portfolio_ids=", ".join(state.get("unmatched_portfolio_ids", [])) or "(none)",
         client_roster=str(metadata.get("client_roster") or "(not provided)"),
         history_block=state.get("history_block") or "",
+    )
+    logger.info(
+        "[CLARIFY] decision action=%s needs_clarification=%s question=%r",
+        decision.action,
+        decision.needs_clarification,
+        (decision.question or "")[:200],
     )
     return {
         "needs_clarification": decision.needs_clarification,

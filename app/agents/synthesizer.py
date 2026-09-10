@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent, extract_text
@@ -15,6 +17,111 @@ from app.utils.logger import logger
 
 
 class SynthesizerAgent(BaseAgent):
+    @staticmethod
+    def _sanitize_uncited_markers(text: str, refs: list[dict]) -> str:
+        if refs:
+            return text
+        # Remove citation-like markers when no references are available.
+        cleaned = re.sub(r"\[[^\]]+\]", "", text)
+        return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+    @staticmethod
+    def _has_effective_result(value: object) -> bool:
+        if isinstance(value, dict):
+            if value.get("error"):
+                return False
+            chunks = value.get("chunks")
+            if isinstance(chunks, list) and bool(chunks):
+                return True
+            nested = value.get("results_by_portfolio_id")
+            if isinstance(nested, dict):
+                return any(SynthesizerAgent._has_effective_result(item) for item in nested.values())
+            if value.get("data") not in (None, {}, []):
+                return True
+            return False
+        return value is not None
+
+    def _has_effective_data(self, state: AgentState) -> bool:
+        for output_key in ("portfolio_output", "crm_output"):
+            tool_results = ((state.get(output_key) or {}).get("tool_results") or {})
+            if not isinstance(tool_results, dict):
+                continue
+            for result in tool_results.values():
+                if self._has_effective_result(result):
+                    return True
+        return False
+
+    def _first_portfolio_snapshot(self, state: AgentState) -> dict | None:
+        def _find_snapshot(value: object) -> dict | None:
+            if not isinstance(value, dict):
+                return None
+
+            direct_data = value.get("data")
+            if isinstance(direct_data, dict):
+                summary = direct_data.get("portfolio_summary")
+                if isinstance(summary, dict):
+                    return {
+                        "portfolio_id": str(value.get("portfolio_id") or "").strip(),
+                        "as_of_date": str(summary.get("as_of_date") or "not stated"),
+                        "currency": str(summary.get("currency") or "not stated"),
+                        "current_value": summary.get("current_value", "not stated"),
+                        "invested_value": summary.get("invested_value", "not stated"),
+                        "unrealized_pnl": summary.get("unrealized_pnl", "not stated"),
+                        "unrealized_pnl_pct": summary.get("unrealized_pnl_pct", "not stated"),
+                    }
+
+            nested = value.get("results_by_portfolio_id")
+            if isinstance(nested, dict):
+                for nested_value in nested.values():
+                    found = _find_snapshot(nested_value)
+                    if found is not None:
+                        return found
+            return None
+
+        tool_results = ((state.get("portfolio_output") or {}).get("tool_results") or {})
+        if not isinstance(tool_results, dict):
+            return None
+        for result in tool_results.values():
+            found = _find_snapshot(result)
+            if found is not None:
+                return found
+        return None
+
+    @staticmethod
+    def _render_portfolio_snapshot(snapshot: dict) -> str:
+        portfolio_id = snapshot.get("portfolio_id") or "not stated"
+        as_of = snapshot.get("as_of_date") or "not stated"
+        currency = snapshot.get("currency") or "not stated"
+        current_value = snapshot.get("current_value", "not stated")
+        invested_value = snapshot.get("invested_value", "not stated")
+        unrealized_pnl = snapshot.get("unrealized_pnl", "not stated")
+        unrealized_pnl_pct = snapshot.get("unrealized_pnl_pct", "not stated")
+
+        return (
+            f"Portfolio data: As of {as_of} | Portfolio {portfolio_id} | {currency} | "
+            f"Current Value: {current_value} | Invested Value: {invested_value} | "
+            f"Unrealized PnL: {unrealized_pnl} ({unrealized_pnl_pct}%)."
+        )
+
+    @staticmethod
+    def _deterministic_unavailable_message(state: AgentState) -> str:
+        missing = [
+            str(section).strip().lower()
+            for section in (state.get("retrieval_missing_sections") or [])
+            if str(section).strip()
+        ]
+        route = str(state.get("route") or "")
+
+        include_portfolio = ("portfolio data" in missing) or route in {"portfolio_only", "both"}
+        include_crm = ("crm data" in missing) or route in {"crm_only", "both"}
+
+        parts: list[str] = []
+        if include_portfolio:
+            parts.append("Portfolio data is unavailable.")
+        if include_crm:
+            parts.append("CRM data is unavailable.")
+        return "\n\n".join(parts) if parts else "Required data is unavailable."
+
     def _build_context(self, state: AgentState) -> tuple[str, list[dict]]:
         parts: list[str] = []
         refs = state.get("citation_references", []) or []
@@ -74,6 +181,19 @@ class SynthesizerAgent(BaseAgent):
         context, refs = self._build_context(state)
         client_id = str((state.get("metadata") or {}).get("client_id") or "unknown")
 
+        snapshot = self._first_portfolio_snapshot(state)
+        route = str(state.get("route") or "")
+        if snapshot is not None and not refs and route in {"portfolio_only", "both"}:
+            text = self._render_portfolio_snapshot(snapshot)
+            text = self._sanitize_uncited_markers(text, refs)
+            logger.info("[SYNTH] completed_deterministic_portfolio_summary reply_length=%s", len(text))
+            return {"final_output": text, "cited_references": []}
+
+        if not refs and not self._has_effective_data(state):
+            text = self._deterministic_unavailable_message(state)
+            logger.info("[SYNTH] completed_deterministic_unavailable reply_length=%s", len(text))
+            return {"final_output": text, "cited_references": []}
+
         try:
             msgs = [
                 SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
@@ -100,6 +220,8 @@ class SynthesizerAgent(BaseAgent):
                 )
             else:
                 text = f"I understood your request: '{user_message}'."
+
+        text = self._sanitize_uncited_markers(text, refs)
 
         logger.info("[SYNTH] completed reply_length=%s citations=%s", len(text), len(refs))
         return {"final_output": text, "cited_references": refs}

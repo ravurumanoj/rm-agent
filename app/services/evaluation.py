@@ -54,7 +54,18 @@ class CitationConsistencyEvaluation(ResponseEvaluation):
     async def evaluate(self, context: EvaluationContext) -> EvaluationResult:
         manager = CitationManager()
         used = manager.extract_cited_source_numbers(context.answer, pattern=self._citation_pattern)
-        available = {ref.source_number for ref in context.citations}
+        available: set[int] = set()
+        for ref in context.citations:
+            source_number = None
+            if isinstance(ref, dict):
+                source_number = ref.get("source_number")
+            else:
+                source_number = getattr(ref, "source_number", None)
+            try:
+                if source_number is not None:
+                    available.add(int(source_number))
+            except Exception:
+                continue
 
         unknown = [n for n in used if n not in available]
         missing_required = self._require_citation_when_available and bool(context.citations) and not used
