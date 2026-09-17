@@ -41,6 +41,27 @@ async def _lifespan(app: FastAPI):
     net = configure_network_environment()
     configure_observability()
     logger.info(
+        "Startup configuration loaded",
+        extra={
+            "app_name": settings.APP_NAME,
+            "version": settings.VERSION,
+            "debug": settings.DEBUG,
+            "reload": settings.RELOAD,
+            "host": settings.HOST,
+            "port": settings.PORT,
+            "log_level": settings.LOG_LEVEL,
+            "llm_provider": settings.LLM_PROVIDER,
+            "postgres_enabled": settings.POSTGRES_ENABLED,
+            "db_startup_required": settings.DB_STARTUP_REQUIRED,
+            "sse_enabled": getattr(settings, "SSE_ENABLED", False),
+            "has_sse_webhook_url": bool(getattr(settings, "SSE_WEBHOOK_URL", "").strip()),
+            "phoenix_enabled": settings.PHOENIX_ENABLED,
+            "phoenix_local_mode": settings.PHOENIX_LOCAL_MODE,
+            "enable_file_logging": settings.ENABLE_FILE_LOGGING,
+            "log_file": settings.LOG_FILE,
+        },
+    )
+    logger.info(
         "Network settings applied",
         extra={
             "has_http_proxy": net["has_http_proxy"],

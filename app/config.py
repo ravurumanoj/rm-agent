@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     UNIQUE_WEBHOOK_ENDPOINT_SECRET: str = ""
     UNIQUE_WEBHOOK_EXPECTED_MODULE_NAME: str = ""
 
-    SSE_ENABLED: bool = False
-    SSE_WEBHOOK_URL: str = ""
+    SSE_ENABLED: bool = True
+    SSE_WEBHOOK_URL: str = "http://localhost:8000/relationship-manager/webhook"
     SSE_MAX_CONCURRENT: int = 10
     SUBSCRIPTIONS: list[str] = []
 
