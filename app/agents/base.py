@@ -38,4 +38,10 @@ class BaseAgent:
     """Base class for shared LLM and history helpers."""
 
     def __init__(self):
-        self.llm = get_shared_llm()
+        self._llm = None
+
+    @property
+    def llm(self):
+        if self._llm is None:
+            self._llm = get_shared_llm()
+        return self._llm
