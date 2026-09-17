@@ -17,7 +17,8 @@ ENV_FILE = os.getenv("APP_ENV_FILE", str(_DEFAULT_ENV_FILE))
 
 
 class Settings(BaseSettings):
-    """Environment-driven application settings. See .env.example for all keys."""
+    """Environment-driven application settings. See .env.example for all
+    keys."""
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
@@ -45,14 +46,14 @@ class Settings(BaseSettings):
     UNIQUE_MODEL_NAME: str = ""
     UNIQUE_APP_ID: str = ""
     UNIQUE_APP_KEY: str = ""
-    UNIQUE_COMPANY_ID: str = ""
-    UNIQUE_USER_ID: str = ""
+    UNIQUE_COMPANY_ID: str = "307071782207144087"
+    UNIQUE_USER_ID: str = "380715897637093530"
     UNIQUE_WEBHOOK_VERIFY_SIGNATURE: bool = False
     UNIQUE_WEBHOOK_ENDPOINT_SECRET: str = ""
     UNIQUE_WEBHOOK_EXPECTED_MODULE_NAME: str = ""
 
-    SSE_ENABLED: bool = True
-    SSE_WEBHOOK_URL: str = "http://localhost:8000/relationship-manager/webhook"
+    SSE_ENABLED: bool = False
+    SSE_WEBHOOK_URL: str = "http://127.0.0.1:8000/relationship-manager/webhook"
     SSE_MAX_CONCURRENT: int = 10
     SUBSCRIPTIONS: list[str] = []
 
@@ -132,15 +133,20 @@ class Settings(BaseSettings):
     GEMINI_MAX_TOKENS: int = 8192
 
     @property
-    def LLM_FALLBACK_MODELS_LIST(self) -> list[str]:
+    def LLM_FALLBACK_MODELS_LIST(self) -> list:
         """Return fallback model names from LLM_FALLBACK_MODELS."""
         if not self.LLM_FALLBACK_MODELS:
             return []
-        return [m.strip() for m in self.LLM_FALLBACK_MODELS.split(",") if m.strip()]
+        return [
+            m.strip()
+            for m in self.LLM_FALLBACK_MODELS.split(",")
+            if m.strip()
+        ]
 
     @property
     def MEMORY_DATABASE_URL(self) -> str:
-        """Return SQLAlchemy DB URL used by memory/checkpointer components."""
+        """Return SQLAlchemy DB URL used by memory/checkpointer
+        components."""
         if self.MEMORY_DATABASE_URL_OVERRIDE:
             return self.MEMORY_DATABASE_URL_OVERRIDE
         from urllib.parse import quote_plus
@@ -161,7 +167,10 @@ class Settings(BaseSettings):
         """Resolve the OTLP endpoint based on local/deployed mode."""
         if self.PHOENIX_LOCAL_MODE:
             return self.PHOENIX_OTLP_ENDPOINT
-        return self.PHOENIX_DEPLOYED_OTLP_ENDPOINT or self.PHOENIX_OTLP_ENDPOINT
+        return (
+            self.PHOENIX_DEPLOYED_OTLP_ENDPOINT
+            or self.PHOENIX_OTLP_ENDPOINT
+        )
 
     @property
     def PHOENIX_EFFECTIVE_OTLP_HEADERS(self) -> dict[str, str]:
@@ -170,14 +179,28 @@ class Settings(BaseSettings):
             return {}
 
         headers: dict[str, str] = {}
-        if self.PHOENIX_SPACE_ID.strip() and self.PHOENIX_SPACE_ID_HEADER.strip():
-            headers[self.PHOENIX_SPACE_ID_HEADER.strip()] = self.PHOENIX_SPACE_ID.strip()
-        if self.PHOENIX_API_KEY.strip() and self.PHOENIX_API_KEY_HEADER.strip():
-            headers[self.PHOENIX_API_KEY_HEADER.strip()] = self.PHOENIX_API_KEY.strip()
+        if (
+            self.PHOENIX_SPACE_ID.strip()
+            and self.PHOENIX_SPACE_ID_HEADER.strip()
+        ):
+            headers[self.PHOENIX_SPACE_ID_HEADER.strip()] = (
+                self.PHOENIX_SPACE_ID.strip()
+            )
+        if (
+            self.PHOENIX_API_KEY.strip()
+            and self.PHOENIX_API_KEY_HEADER.strip()
+        ):
+            headers[self.PHOENIX_API_KEY_HEADER.strip()] = (
+                self.PHOENIX_API_KEY.strip()
+            )
         return headers
 
-    def required_env_keys_for_provider(self, provider: Optional[str] = None) -> list[str]:
+    def required_env_keys_for_provider(
+        self,
+        provider: Optional[str] = None,
+    ) -> list[str]:
         """Return required environment keys for the selected LLM provider."""
+
         active = (provider or self.LLM_PROVIDER or "").lower().strip()
         if active == LLM_PROVIDER_OPENAI:
             return ["OPENAI_API_KEY"]
@@ -197,25 +220,43 @@ class Settings(BaseSettings):
     def missing_runtime_settings(self) -> dict[str, list[str]]:
         """Return missing runtime keys grouped by concern.
 
-        This is intentionally non-throwing so the app can boot in scaffold mode.
+        This is intentionally non-throwing so the app can boot in
+        scaffold mode.
         """
         missing_provider: list[str] = []
         active = (self.LLM_PROVIDER or "").lower().strip()
         if active == LLM_PROVIDER_UNIQUE:
-            base_keys = ["UNIQUE_API_BASE_URL", "UNIQUE_MODEL_NAME", "UNIQUE_APP_ID", "UNIQUE_APP_KEY"]
-            missing_provider.extend([key for key in base_keys if not str(getattr(self, key, "")).strip()])
+            base_keys = [
+                "UNIQUE_API_BASE_URL",
+                "UNIQUE_MODEL_NAME",
+                "UNIQUE_APP_ID",
+                "UNIQUE_APP_KEY",
+            ]
+            missing_provider.extend(
+                [
+                    key
+                    for key in base_keys
+                    if not str(getattr(self, key, "")).strip()
+                ]
+            )
             if not self.UNIQUE_COMPANY_ID.strip():
                 missing_provider.append("UNIQUE_COMPANY_ID")
             if not self.UNIQUE_USER_ID.strip():
                 missing_provider.append("UNIQUE_USER_ID")
         else:
             missing_provider.extend(
-                [key for key in self.required_env_keys_for_provider() if not str(getattr(self, key, "")).strip()]
+                [
+                    key
+                    for key in self.required_env_keys_for_provider()
+                    if not str(getattr(self, key, "")).strip()
+                ]
             )
 
         missing_mcp: list[str] = []
         if self.MCP_ENABLED and not self.MCP_EFFECTIVE_SERVER_URL.strip():
-            missing_mcp.append("MCP_SERVER_URL (or MCP_CRM_SERVER_URL)")
+            missing_mcp.append(
+                "MCP_SERVER_URL (or MCP_CRM_SERVER_URL)"
+            )
 
         missing_phoenix: list[str] = []
         if self.PHOENIX_ENABLED:
@@ -223,7 +264,10 @@ class Settings(BaseSettings):
                 if self.PHOENIX_LOCAL_MODE:
                     missing_phoenix.append("PHOENIX_OTLP_ENDPOINT")
                 else:
-                    missing_phoenix.append("PHOENIX_DEPLOYED_OTLP_ENDPOINT (or PHOENIX_OTLP_ENDPOINT)")
+                    missing_phoenix.append(
+                        "PHOENIX_DEPLOYED_OTLP_ENDPOINT "
+                        "(or PHOENIX_OTLP_ENDPOINT)"
+                    )
 
             if not self.PHOENIX_LOCAL_MODE:
                 if not self.PHOENIX_SPACE_ID.strip():

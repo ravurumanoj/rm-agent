@@ -1,3 +1,4 @@
+import json
 import logging
 import sys
 from contextvars import ContextVar, Token
@@ -13,6 +14,48 @@ class CorrelationIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.correlation_id = get_correlation_id()
         return True
+
+
+class ExtraFieldsFormatter(logging.Formatter):
+    """Append non-standard LogRecord fields as compact JSON when present."""
+
+    _reserved_fields = {
+        "args",
+        "asctime",
+        "created",
+        "correlation_id",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "module",
+        "msecs",
+        "message",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        extras = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in self._reserved_fields and not key.startswith("_")
+        }
+        if not extras:
+            return message
+        return f"{message} extras={json.dumps(extras, default=str, sort_keys=True)}"
 
 
 def set_correlation_id(correlation_id: str) -> Token:
@@ -38,7 +81,7 @@ def setup_logger(name: str = "rm_agent", level: int = logging.INFO) -> logging.L
     if app_logger.handlers:
         return app_logger
 
-    formatter = logging.Formatter(
+    formatter = ExtraFieldsFormatter(
         "%(asctime)s %(levelname)s correlation_id=%(correlation_id)s %(name)s %(filename)s:%(lineno)d %(funcName)s %(message)s"
     )
 
