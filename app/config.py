@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     UNIQUE_WEBHOOK_ENDPOINT_SECRET: str = ""
     UNIQUE_WEBHOOK_EXPECTED_MODULE_NAME: str = ""
 
+    SSE_ENABLED: bool = False
+    SSE_WEBHOOK_URL: str = ""
+    SSE_MAX_CONCURRENT: int = 10
+
     LLM_MAX_RETRIES: int = 3
     LLM_RETRY_BASE_DELAY: float = 1.0
     LLM_RETRY_BACKOFF_MULTIPLIER: float = 2.0

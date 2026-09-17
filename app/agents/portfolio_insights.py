@@ -15,6 +15,7 @@ from app.prompts.portfolio_insights import (
     PORTFOLIO_TOOL_COLLECTION_SUFFIX,
 )
 from app.schemas.internal import AgentState
+from app.services.observability import operation_span, record_exception
 from app.utils.logger import logger
 
 
@@ -239,7 +240,18 @@ class PortfolioInsightsAgent(BaseAgent):
                     raw_args = {}
 
                 try:
-                    result = await self._invoke_tool_with_scoping(tool, raw_args, selected_portfolio_ids)
+                    with operation_span(
+                        "tool.portfolio.invoke",
+                        kind="TOOL",
+                        attributes={
+                            "tool.name": name,
+                            "tool.call_id": call_id,
+                            "app.selected_portfolio_count": len(selected_portfolio_ids),
+                        },
+                    ) as span:
+                        result = await self._invoke_tool_with_scoping(tool, raw_args, selected_portfolio_ids)
+                        if span is not None:
+                            span.set_attribute("tool.success", not (isinstance(result, dict) and bool(result.get("error"))))
                     has_error = isinstance(result, dict) and bool(result.get("error"))
                     logger.debug(
                         "[PORTFOLIO] tool_call name=%s raw_args=%s error=%s chunk_count=%s",
@@ -250,6 +262,14 @@ class PortfolioInsightsAgent(BaseAgent):
                     )
                     return name, call_id, result
                 except Exception as exc:
+                    with operation_span(
+                        "tool.portfolio.invoke",
+                        kind="TOOL",
+                        attributes={"tool.name": name, "tool.call_id": call_id},
+                    ) as span:
+                        if span is not None:
+                            span.set_attribute("tool.success", False)
+                        record_exception(span, exc)
                     logger.warning("[PORTFOLIO] tool_call_exception name=%s error=%s", name, exc)
                     return name, call_id, {"error": str(exc)}
 

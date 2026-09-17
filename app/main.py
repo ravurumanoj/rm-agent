@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 import sys
+import asyncio
+import contextlib
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
@@ -19,16 +21,19 @@ from app.constants import (
 )
 from app.db.session import init_db, ping_db
 from app.routes.agent import router as agent_router
-from app.routes.agent import webhook_router
+from app.routes.webhook import router as webhook_router
 from app.services.network import configure_network_environment
-from app.services.observability import configure_observability
+from app.services.observability import configure_observability, shutdown_observability
+from app.services.sse_listener import start_sse_listener
 from app.utils.logger import configure_logging, logger, reset_correlation_id, set_correlation_id
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    configure_observability()
+    sse_task: asyncio.Task | None = None
+
     net = configure_network_environment()
+    configure_observability()
     logger.info(
         "Network settings applied",
         extra={
@@ -66,7 +71,32 @@ async def _lifespan(app: FastAPI):
             logger.critical("PostgreSQL database init failed and DB_STARTUP_REQUIRED=true: %s", exc)
             raise RuntimeError("Database startup dependency failed") from exc
         logger.error("PostgreSQL database init failed; starting in degraded mode: %s", exc)
+
+    if getattr(settings, "SSE_ENABLED", False):
+        webhook_url = getattr(settings, "SSE_WEBHOOK_URL", "").strip()
+        if webhook_url:
+            logger.info("Starting SSE listener task -> %s", webhook_url)
+            sse_task = asyncio.create_task(
+                start_sse_listener(
+                    webhook_url,
+                    getattr(settings, "SSE_MAX_CONCURRENT", 10),
+                ),
+                name="sse-listener",
+            )
+        else:
+            logger.warning("SSE listener enabled but SSE_WEBHOOK_URL is empty")
+    else:
+        logger.info("SSE listener disabled (SSE_ENABLED is not true)")
+
     yield
+
+    if sse_task is not None:
+        sse_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sse_task
+        logger.info("SSE listener stopped")
+
+    shutdown_observability()
 
 
 def _validate_cors(origins: list[str]) -> list[str]:

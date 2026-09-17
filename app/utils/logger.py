@@ -1,6 +1,9 @@
 import logging
 import sys
 from contextvars import ContextVar, Token
+from pathlib import Path
+
+from app.config import settings
 
 
 _correlation_id_ctx: ContextVar[str] = ContextVar("correlation_id", default="-")
@@ -44,6 +47,19 @@ def setup_logger(name: str = "rm_agent", level: int = logging.INFO) -> logging.L
     console_handler.setLevel(level)
     console_handler.addFilter(CorrelationIdFilter())
     app_logger.addHandler(console_handler)
+
+    if settings.ENABLE_FILE_LOGGING and settings.LOG_FILE.strip():
+        log_path = Path(settings.LOG_FILE)
+        if not log_path.is_absolute():
+            log_path = Path(__file__).resolve().parents[2] / log_path
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(level)
+        file_handler.addFilter(CorrelationIdFilter())
+        app_logger.addHandler(file_handler)
+
     app_logger.propagate = False
 
     return app_logger

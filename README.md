@@ -161,6 +161,43 @@ Used in these backend capabilities:
 - LLM tracing and metadata observability.
 - Local or deployed collector modes supported.
 
+### Observability coverage in this backend
+Current tracing is not limited to one endpoint. The backend now emits spans across these layers:
+- API boundary spans for `POST /agent/chat`, `POST /agent/stream`, and `POST /relationship-manager/webhook`
+- Turn/workflow spans for the orchestrator lifecycle
+- Node-level spans for router, query-details resolution, clarification, execution, synthesizer, and evaluation
+- Execution-mode spans for parallel and sequential sub-agent runs
+- Tool spans for portfolio/CRM tool invocation
+- LLM spans for router-managed providers and direct Unique SDK calls
+- Webhook SDK spans for signature verification and assistant-message writeback
+- Shutdown flush so buffered spans are exported on app stop
+
+Implementation notes:
+- Tracer bootstrap and exporter setup live in `app/services/observability.py`
+- Reusable span helpers live in `app/services/tracing.py`
+- New APIs should use the same pattern: request span -> service/workflow span -> node/tool/LLM spans
+
+### Arize enterprise setup notes
+For enterprise Arize AX usage on a client-managed environment:
+- Set `PHOENIX_ENABLED=true`
+- Set `PHOENIX_LOCAL_MODE=false`
+- Set `PHOENIX_DEPLOYED_OTLP_ENDPOINT` to the enterprise collector endpoint
+- Set `PHOENIX_SPACE_ID` and `PHOENIX_API_KEY`
+- If your tenant requires custom auth header names, set `PHOENIX_SPACE_ID_HEADER` and `PHOENIX_API_KEY_HEADER`
+
+Behavior:
+- Local mode checks whether the local collector is reachable before enabling tracing
+- Deployed mode does not perform the localhost reachability check
+- If telemetry dependencies are missing, the app continues to run and tracing becomes a no-op
+- If message capture is enabled, prompt/response text is attached to spans; otherwise only metadata and token counts are recorded
+
+Recommended enterprise validation:
+1. Start the app with enterprise Phoenix settings
+2. Call `POST /agent/chat`
+3. Call `POST /agent/stream`
+4. Trigger `POST /relationship-manager/webhook`
+5. Confirm traces appear in Arize with nested spans for request, orchestration, tools, and LLM calls
+
 ---
 
 ## 6. Key API Endpoints
@@ -182,6 +219,10 @@ Behavior:
 - Backend generates a fresh UUID correlation ID for every incoming request.
 - Response always includes `X-Correlation-ID`.
 - Logs include `correlation_id=...` for end-to-end tracing.
+
+This correlation ID is complementary to OpenTelemetry tracing:
+- logs help with operational debugging
+- spans help with request, tool, and LLM execution analysis in Phoenix/Arize
 
 ---
 
@@ -255,6 +296,15 @@ phoenix serve
 
 5. If traces are not visible:
 - Check `PHOENIX_ENABLED`, endpoint URL, and mode (`PHOENIX_LOCAL_MODE`).
+- For enterprise Arize, confirm `PHOENIX_LOCAL_MODE=false`, `PHOENIX_DEPLOYED_OTLP_ENDPOINT`, `PHOENIX_SPACE_ID`, and `PHOENIX_API_KEY` are all set.
+- If you see `phoenix_local_collector_unreachable`, you are still pointing at local mode or a localhost collector endpoint.
+- Verify the process can reach the collector from the client network.
+- Confirm the relevant API path was exercised: `/agent/chat`, `/agent/stream`, or `/relationship-manager/webhook`.
+
+6. If you add a new API and traces do not show the full flow:
+- Add a request span in the route handler
+- Add a service/workflow span in the shared service function
+- Reuse `app/services/tracing.py` helpers instead of creating ad hoc tracing code
 
 ---
 

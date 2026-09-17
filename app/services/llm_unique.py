@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator, Optional
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 
 from app.config import settings
+from app.services.observability import llm_span, record_exception, record_llm_output
 from app.services.unique_sdk_client import configure_unique_sdk
 from app.utils.logger import logger
 
@@ -149,6 +150,29 @@ class UniqueAILLM:
             )
         return normalized
 
+    def _extract_usage(self, payload: Any) -> Optional[dict[str, int]]:
+        if isinstance(payload, dict):
+            usage = payload.get("usage")
+            if isinstance(usage, dict):
+                return {
+                    "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+                    "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+                    "total_tokens": usage.get("total_tokens"),
+                }
+        if hasattr(payload, "to_dict") and callable(payload.to_dict):
+            try:
+                return self._extract_usage(payload.to_dict())
+            except Exception:
+                return None
+        usage = getattr(payload, "usage", None)
+        if isinstance(usage, dict):
+            return {
+                "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+                "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+            }
+        return None
+
     def _coerce_tool_defs(self, tools: Optional[list]) -> list[dict[str, Any]]:
         if not tools:
             return []
@@ -257,19 +281,52 @@ class UniqueAILLM:
         result = create(**payload)
         text = self._extract_text(result)
         tool_calls = self._extract_tool_calls(result)
-        return AIMessage(content=text, additional_kwargs={"tool_calls": tool_calls} if tool_calls else {})
+        usage = self._extract_usage(result)
+        response_metadata = {"token_usage": usage} if usage else {}
+        return AIMessage(
+            content=text,
+            additional_kwargs={"tool_calls": tool_calls} if tool_calls else {},
+            response_metadata=response_metadata,
+        )
 
     async def ainvoke(self, messages: list[BaseMessage], **kwargs) -> AIMessage:
-        try:
-            return await asyncio.to_thread(self._invoke_sync_unique_sdk, messages, **kwargs)
-        except RuntimeError as exc:
-            # SDK path unavailable: fallback to OpenAI-compatible endpoint path.
-            if "unique-sdk" not in str(exc):
+        with llm_span(
+            "unique_ai.ainvoke",
+            model=self.model,
+            provider=self.PROVIDER_NAME,
+            messages=messages,
+            metadata={"bound_tool_count": len(self._bound_tools)},
+        ) as span:
+            try:
+                result = await asyncio.to_thread(self._invoke_sync_unique_sdk, messages, **kwargs)
+                record_llm_output(
+                    span,
+                    str(result.content or ""),
+                    (result.response_metadata or {}).get("token_usage") if hasattr(result, "response_metadata") else None,
+                )
+                if span is not None:
+                    span.set_attribute("llm.success", True)
+                    span.set_attribute("llm.tool_call_count", len(getattr(result, "tool_calls", []) or []))
+                return result
+            except RuntimeError as exc:
+                if "unique-sdk" not in str(exc):
+                    if span is not None:
+                        span.set_attribute("llm.success", False)
+                    record_exception(span, exc)
+                    raise
+                logger.warning("Unique SDK path unavailable; using OpenAI-compatible fallback: %s", exc)
+                if span is not None:
+                    span.set_attribute("llm.fallback_provider", "openai_compatible")
+                result = await self._build_openai_fallback_client().ainvoke(messages, **kwargs)
+                record_llm_output(span, str(result.content or ""))
+                if span is not None:
+                    span.set_attribute("llm.success", True)
+                return result
+            except Exception as exc:
+                if span is not None:
+                    span.set_attribute("llm.success", False)
+                record_exception(span, exc)
                 raise
-            logger.warning("Unique SDK path unavailable; using OpenAI-compatible fallback: %s", exc)
-            return await self._build_openai_fallback_client().ainvoke(messages, **kwargs)
-        except Exception:
-            raise
 
     async def astream(self, messages: list[BaseMessage], **kwargs) -> AsyncIterator[AIMessageChunk]:
         # unique-sdk path is synchronous; convert full response to one chunk.

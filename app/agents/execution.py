@@ -15,6 +15,7 @@ from app.constants import (
 from app.schemas.citations import CitationChunk
 from app.schemas.internal import AgentState
 from app.services.citations import CitationManager, coerce_citation_chunk
+from app.services.tracing import operation_span, record_exception
 from app.utils.logger import logger
 
 
@@ -162,32 +163,58 @@ def _build_citation_references(tool_outputs: list[dict[str, Any]]) -> list[dict[
 
 
 async def _run_parallel(state: AgentState, run_targets: set[str], replan_instruction: str = "") -> dict[str, Any]:
-    logger.info("[EXEC] mode=parallel targets=%s", sorted(run_targets))
-    names = [name for name in [AGENT_PORTFOLIO, AGENT_CRM] if name in run_targets]
-    tasks = []
-    for name in names:
-        agent, _key, _label = _AGENT_REGISTRY[name]
-        tasks.append(agent.collect_data(state, extra_context=replan_instruction))
+    with operation_span(
+        "agent.execution.parallel",
+        kind="CHAIN",
+        attributes={"app.target_count": len(run_targets), "app.targets": sorted(run_targets)},
+    ) as span:
+        logger.info("[EXEC] mode=parallel targets=%s", sorted(run_targets))
+        try:
+            names = [name for name in [AGENT_PORTFOLIO, AGENT_CRM] if name in run_targets]
+            tasks = []
+            for name in names:
+                agent, _key, _label = _AGENT_REGISTRY[name]
+                tasks.append(agent.collect_data(state, extra_context=replan_instruction))
 
-    outputs: dict[str, Any] = {}
-    results = await asyncio.gather(*tasks)
-    for name, result in zip(names, results):
-        _agent, key, _label = _AGENT_REGISTRY[name]
-        outputs[key] = result
-    return outputs
+            outputs: dict[str, Any] = {}
+            results = await asyncio.gather(*tasks)
+            for name, result in zip(names, results):
+                _agent, key, _label = _AGENT_REGISTRY[name]
+                outputs[key] = result
+            if span is not None:
+                span.set_attribute("app.execution.success", True)
+            return outputs
+        except Exception as exc:
+            if span is not None:
+                span.set_attribute("app.execution.success", False)
+            record_exception(span, exc)
+            raise
 
 
 async def _run_sequential(state: AgentState, producer: str, replan_instruction: str = "") -> dict[str, Any]:
-    logger.info("[EXEC] mode=sequential producer=%s", producer)
-    consumer = AGENT_CRM if producer == AGENT_PORTFOLIO else AGENT_PORTFOLIO
-    prod_agent, prod_key, prod_label = _AGENT_REGISTRY[producer]
-    cons_agent, cons_key, _ = _AGENT_REGISTRY[consumer]
+    with operation_span(
+        "agent.execution.sequential",
+        kind="CHAIN",
+        attributes={"app.producer": producer},
+    ) as span:
+        logger.info("[EXEC] mode=sequential producer=%s", producer)
+        try:
+            consumer = AGENT_CRM if producer == AGENT_PORTFOLIO else AGENT_PORTFOLIO
+            prod_agent, prod_key, prod_label = _AGENT_REGISTRY[producer]
+            cons_agent, cons_key, _ = _AGENT_REGISTRY[consumer]
 
-    producer_output = await prod_agent.collect_data(state, extra_context=replan_instruction)
-    handoff = _handoff_context(prod_label, producer_output)
-    consumer_extra = (replan_instruction + "\n\n" + handoff).strip() if handoff else replan_instruction
-    consumer_output = await cons_agent.collect_data(state, extra_context=consumer_extra)
-    return {prod_key: producer_output, cons_key: consumer_output}
+            producer_output = await prod_agent.collect_data(state, extra_context=replan_instruction)
+            handoff = _handoff_context(prod_label, producer_output)
+            consumer_extra = (replan_instruction + "\n\n" + handoff).strip() if handoff else replan_instruction
+            consumer_output = await cons_agent.collect_data(state, extra_context=consumer_extra)
+            if span is not None:
+                span.set_attribute("app.execution.success", True)
+            return {prod_key: producer_output, cons_key: consumer_output}
+        except Exception as exc:
+            if span is not None:
+                span.set_attribute("app.execution.success", False)
+            record_exception(span, exc)
+            raise
 
 
 async def execute_agents(

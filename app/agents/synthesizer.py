@@ -17,13 +17,42 @@ from app.utils.logger import logger
 
 
 class SynthesizerAgent(BaseAgent):
+    _LEAKED_INSTRUCTION_PATTERNS = (
+        r"state that section is unavailable[^.]*\.?",
+        r"briefly say that the section is unavailable[^.]*\.?",
+        r"do not repeat these instructions in the answer[^.]*\.?",
+        r"do not repeat this note verbatim[^.]*\.?",
+        r"do not fabricate the missing information[^.]*\.?",
+        r"in one line and continue[^.]*\.?",
+    )
+
     @staticmethod
     def _sanitize_uncited_markers(text: str, refs: list[dict]) -> str:
         if refs:
-            return text
+            allowed_markers = {
+                str(ref.get("marker") or "").strip().lower()
+                for ref in refs
+                if isinstance(ref, dict) and str(ref.get("marker") or "").strip()
+            }
+
+            def _replace_marker(match: re.Match[str]) -> str:
+                marker = match.group(0)
+                return marker if marker.lower() in allowed_markers else ""
+
+            cleaned = re.sub(r"\[[^\]]+\]", _replace_marker, text)
+            return re.sub(r"\s{2,}", " ", cleaned).strip()
         # Remove citation-like markers when no references are available.
         cleaned = re.sub(r"\[[^\]]+\]", "", text)
         return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+    @classmethod
+    def _sanitize_instruction_leakage(cls, text: str) -> str:
+        cleaned = text
+        for pattern in cls._LEAKED_INSTRUCTION_PATTERNS:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        cleaned = re.sub(r"(?:\n\s*){3,}", "\n\n", cleaned)
+        return cleaned.strip(" \n:-")
 
     @staticmethod
     def _has_effective_result(value: object) -> bool:
@@ -221,6 +250,7 @@ class SynthesizerAgent(BaseAgent):
             else:
                 text = f"I understood your request: '{user_message}'."
 
+        text = self._sanitize_instruction_leakage(text)
         text = self._sanitize_uncited_markers(text, refs)
 
         logger.info("[SYNTH] completed reply_length=%s citations=%s", len(text), len(refs))

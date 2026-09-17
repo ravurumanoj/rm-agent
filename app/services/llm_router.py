@@ -12,7 +12,7 @@ from app.services.llm_core import (
     detect_provider,
     invoke_with_retry,
 )
-from app.services.observability import llm_span
+from app.services.observability import llm_span, record_exception, record_llm_result
 from app.utils.logger import logger
 
 
@@ -67,12 +67,14 @@ class LLMRouter:
                         max_delay=self._max_delay,
                         provider_name=model,
                     )
+                record_llm_result(span, result)
                 if span is not None:
                     span.set_attribute("llm.success", True)
                 return result
-            except Exception:
+            except Exception as exc:
                 if span is not None:
                     span.set_attribute("llm.success", False)
+                record_exception(span, exc)
                 raise
 
     async def ainvoke(self, messages: list[BaseMessage], **kwargs) -> AIMessage:
@@ -105,14 +107,21 @@ class LLMRouter:
                     metadata={"stream": True},
                 ) as span:
                     try:
+                        collected_chunks: list[str] = []
                         async for chunk in self._svc(model).astream(messages, **kwargs):
+                            content = getattr(chunk, "content", "")
+                            if content:
+                                collected_chunks.append(content if isinstance(content, str) else str(content))
                             yielded_any = True
                             yield chunk
+                        if collected_chunks:
+                            record_llm_result(span, AIMessage(content="".join(collected_chunks)))
                         if span is not None:
                             span.set_attribute("llm.success", True)
-                    except Exception:
+                    except Exception as exc:
                         if span is not None:
                             span.set_attribute("llm.success", False)
+                        record_exception(span, exc)
                         raise
                 if model != self._models[0]:
                     logger.info("LLMRouter stream fallback used model '%s'", model)

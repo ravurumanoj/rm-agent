@@ -6,6 +6,25 @@ from app.schemas.internal import AgentState
 from app.utils.logger import logger
 
 
+def _has_effective_external_tool_outputs(tool_outputs: list[dict[str, Any]]) -> bool:
+    if not tool_outputs:
+        return False
+    for item in tool_outputs:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("chunks"), list) and bool(item.get("chunks")):
+            return True
+        result = item.get("result")
+        if isinstance(result, dict) and result.get("error"):
+            result = None
+        if result not in (None, {}, []):
+            return True
+        content = item.get("content")
+        if content not in (None, "", {}, []):
+            return True
+    return False
+
+
 def extract_injected_domain_results(
     state: AgentState,
     *,
@@ -50,13 +69,22 @@ def extract_injected_domain_results(
         if isinstance(raw_chunks, list):
             chunks.extend([chunk for chunk in raw_chunks if isinstance(chunk, dict)])
 
-    if tool_results:
+    if tool_results and _has_effective_external_tool_outputs(raw):
         logger.info(
             "[TOOL_INJECT] domain=%s using_external_tool_outputs tools=%s chunks=%s",
             domain_name,
             tools_called,
             len(chunks),
         )
+    elif tool_results:
+        logger.info(
+            "[TOOL_INJECT] domain=%s ignoring_ineffective_external_tool_outputs tools=%s",
+            domain_name,
+            tools_called,
+        )
+        tool_results = {}
+        tools_called = []
+        chunks = []
     else:
         logger.debug("[TOOL_INJECT] domain=%s no_external_tool_outputs; proceeding to normal collection", domain_name)
 

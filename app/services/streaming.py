@@ -4,6 +4,7 @@ import json
 from typing import Any, AsyncGenerator
 
 from app.agents.orchestrator import run_turn
+from app.services.tracing import operation_span, record_exception
 from app.utils.logger import logger
 
 
@@ -26,36 +27,54 @@ async def stream_chat_events(
     tool_outputs: list[dict[str, Any]] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Yield SSE events compatible with wealth app local UI stream contract."""
-    yield sse_data({"type": "step", "node": "router", "state": "running"})
-    yield sse_data({"type": "step", "node": "router", "state": "done"})
-    yield sse_data({"type": "step", "node": "execute_agents", "state": "running"})
+    with operation_span(
+        "http.agent.stream.events",
+        kind="CHAIN",
+        attributes={
+            "session.id": session_id,
+            "app.tool_output_count": len(tool_outputs or []),
+        },
+    ) as span:
+        yield sse_data({"type": "step", "node": "router", "state": "running"})
+        yield sse_data({"type": "step", "node": "router", "state": "done"})
+        yield sse_data({"type": "step", "node": "execute_agents", "state": "running"})
 
-    try:
-        result = await run_turn(
-            session_id=session_id,
-            message=message,
-            metadata=metadata or {},
-            tool_outputs=tool_outputs or [],
+        try:
+            result = await run_turn(
+                session_id=session_id,
+                message=message,
+                metadata=metadata or {},
+                tool_outputs=tool_outputs or [],
+            )
+        except Exception as exc:
+            logger.error("stream_chat_events failed: %s", exc, exc_info=True)
+            record_exception(span, exc)
+            if span is not None:
+                span.set_attribute("app.stream.success", False)
+            yield sse_data({"type": "error", "message": str(exc)})
+            return
+
+        yield sse_data({"type": "step", "node": "execute_agents", "state": "done"})
+        yield sse_data({"type": "step", "node": "synthesizer", "state": "running"})
+
+        full_response = result.reply or ""
+        token_count = 0
+        for token in _chunk_text(full_response):
+            token_count += 1
+            yield sse_data({"type": "token", "content": token})
+
+        yield sse_data({"type": "step", "node": "synthesizer", "state": "done"})
+        yield sse_data(
+            {
+                "type": "done",
+                "agent_used": "orchestrator",
+                "full_response": full_response,
+                "citations": result.citations,
+                "evaluations": result.evaluations,
+            }
         )
-    except Exception as exc:
-        logger.error("stream_chat_events failed: %s", exc, exc_info=True)
-        yield sse_data({"type": "error", "message": str(exc)})
-        return
-
-    yield sse_data({"type": "step", "node": "execute_agents", "state": "done"})
-    yield sse_data({"type": "step", "node": "synthesizer", "state": "running"})
-
-    full_response = result.reply or ""
-    for token in _chunk_text(full_response):
-        yield sse_data({"type": "token", "content": token})
-
-    yield sse_data({"type": "step", "node": "synthesizer", "state": "done"})
-    yield sse_data(
-        {
-            "type": "done",
-            "agent_used": "orchestrator",
-            "full_response": full_response,
-            "citations": result.citations,
-            "evaluations": result.evaluations,
-        }
-    )
+        if span is not None:
+            span.set_attribute("app.stream.success", True)
+            span.set_attribute("app.stream.token_event_count", token_count)
+            span.set_attribute("app.citation_count", len(result.citations))
+            span.set_attribute("app.evaluation_count", len(result.evaluations))
