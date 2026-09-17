@@ -133,6 +133,7 @@ async def relationship_manager_webhook(request: Request) -> JSONResponse:
             span.set_attribute("app.webhook.event", event.event)
 
         if event.event not in _ANSWERABLE_EVENTS:
+            logger.info("Webhook event ignored", extra={"event": event.event, "reason": "unsupported_event"})
             if span is not None:
                 span.set_attribute("http.status_code", 200)
                 span.set_attribute("app.webhook.handled", False)
@@ -141,6 +142,15 @@ async def relationship_manager_webhook(request: Request) -> JSONResponse:
         expected_module = (settings.UNIQUE_WEBHOOK_EXPECTED_MODULE_NAME or "").strip()
         payload_module_name = str(getattr(event.payload, "name", "") or "").strip()
         if expected_module and event.event in _EXTERNAL_MODULE_EVENTS and payload_module_name != expected_module:
+            logger.info(
+                "Webhook event ignored",
+                extra={
+                    "event": event.event,
+                    "reason": "unexpected_module",
+                    "expected_module": expected_module,
+                    "payload_module_name": payload_module_name,
+                },
+            )
             if span is not None:
                 span.set_attribute("http.status_code", 200)
                 span.set_attribute("app.webhook.handled", False)
@@ -151,6 +161,15 @@ async def relationship_manager_webhook(request: Request) -> JSONResponse:
         chat_id = payload.chatId.strip()
 
         if not user_text or not chat_id:
+            logger.info(
+                "Webhook event ignored",
+                extra={
+                    "event": event.event,
+                    "reason": "missing_chat_or_text",
+                    "has_chat_id": bool(chat_id),
+                    "has_user_text": bool(user_text),
+                },
+            )
             if span is not None:
                 span.set_attribute("http.status_code", 200)
                 span.set_attribute("app.webhook.handled", False)

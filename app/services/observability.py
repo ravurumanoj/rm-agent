@@ -14,6 +14,42 @@ _tracer = None
 _provider = None
 
 
+class _LoggingOTLPSpanExporter:
+    """Wrap OTLP exporter so export failures are surfaced in app logs."""
+
+    def __init__(self, exporter: Any) -> None:
+        self._exporter = exporter
+
+    def export(self, spans: Any) -> Any:
+        try:
+            result = self._exporter.export(spans)
+            result_code = getattr(result, "name", None) or getattr(result, "value", result)
+            if str(result_code).upper() not in {"SUCCESS", "0"}:
+                logger.warning(
+                    "[OBS] span_export_failed result=%s span_count=%s endpoint=%s",
+                    result_code,
+                    len(spans) if spans is not None else 0,
+                    settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
+                )
+            return result
+        except Exception as exc:
+            logger.exception(
+                "[OBS] span_export_exception endpoint=%s error=%s",
+                settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
+                exc,
+            )
+            raise
+
+    def shutdown(self) -> Any:
+        return self._exporter.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> Any:
+        force_flush = getattr(self._exporter, "force_flush", None)
+        if callable(force_flush):
+            return force_flush(timeout_millis=timeout_millis)
+        return True
+
+
 def _is_local_phoenix_endpoint_reachable(endpoint: str) -> bool:
     parsed = urlparse(endpoint)
     host = (parsed.hostname or "").strip().lower()
@@ -94,7 +130,7 @@ def configure_observability() -> None:
         endpoint=settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
         headers=settings.PHOENIX_EFFECTIVE_OTLP_HEADERS,
     )
-    processor = BatchSpanProcessor(exporter)
+    processor = BatchSpanProcessor(_LoggingOTLPSpanExporter(exporter))
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
     _provider = provider

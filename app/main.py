@@ -32,6 +32,12 @@ from app.utils.logger import configure_logging, logger, reset_correlation_id, se
 async def _lifespan(app: FastAPI):
     sse_task: asyncio.Task | None = None
 
+    def _log_sse_task_result(task: asyncio.Task) -> None:
+        with contextlib.suppress(asyncio.CancelledError):
+            exc = task.exception()
+            if exc is not None:
+                logger.exception("SSE listener task crashed", exc_info=exc)
+
     net = configure_network_environment()
     configure_observability()
     logger.info(
@@ -83,6 +89,7 @@ async def _lifespan(app: FastAPI):
                 ),
                 name="sse-listener",
             )
+            sse_task.add_done_callback(_log_sse_task_result)
         else:
             logger.warning("SSE listener enabled but SSE_WEBHOOK_URL is empty")
     else:

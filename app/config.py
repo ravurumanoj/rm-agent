@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     SSE_ENABLED: bool = False
     SSE_WEBHOOK_URL: str = ""
     SSE_MAX_CONCURRENT: int = 10
+    SUBSCRIPTIONS: list[str] = []
 
     LLM_MAX_RETRIES: int = 3
     LLM_RETRY_BASE_DELAY: float = 1.0
