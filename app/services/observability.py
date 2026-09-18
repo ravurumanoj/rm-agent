@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from urllib.parse import urlparse
 import socket
 from typing import Any
@@ -12,6 +13,24 @@ from app.utils.logger import logger
 _observability_initialized = False
 _tracer = None
 _provider = None
+
+
+@dataclass(frozen=True)
+class _TelemetryDeps:
+    trace_api: Any
+    exporter_cls: Any
+    resource_cls: Any
+    provider_cls: Any
+    processor_cls: Any
+
+
+@dataclass(frozen=True)
+class _EndpointInfo:
+    endpoint: str
+    scheme: str
+    host: str
+    port: int | None
+    path: str
 
 
 class _LoggingOTLPSpanExporter:
@@ -50,20 +69,220 @@ class _LoggingOTLPSpanExporter:
         return True
 
 
-def _is_local_phoenix_endpoint_reachable(endpoint: str) -> bool:
+def _parse_endpoint(endpoint: str) -> _EndpointInfo:
     parsed = urlparse(endpoint)
     host = (parsed.hostname or "").strip().lower()
+    scheme = (parsed.scheme or "").strip().lower()
     port = parsed.port
-    if not host or port is None:
-        return False
-    if host not in {"127.0.0.1", "localhost"}:
-        return True
+    if port is None:
+        if scheme == "https":
+            port = 443
+        elif scheme == "http":
+            port = 80
+
+    return _EndpointInfo(
+        endpoint=endpoint,
+        scheme=scheme or "missing",
+        host=host or "missing",
+        port=port,
+        path=parsed.path or "/",
+    )
+
+
+def _can_connect(endpoint_info: _EndpointInfo, timeout: float) -> tuple[bool, str]:
+    if endpoint_info.host == "missing" or endpoint_info.port is None:
+        return False, "invalid_endpoint"
 
     try:
-        with socket.create_connection((host, port), timeout=0.25):
-            return True
-    except OSError:
+        with socket.create_connection((endpoint_info.host, endpoint_info.port), timeout=timeout):
+            return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
+def _load_telemetry_dependencies() -> _TelemetryDeps | None:
+    try:
+        from opentelemetry import trace  # type: ignore[reportMissingImports]
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[reportMissingImports]
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.resources import Resource  # type: ignore[reportMissingImports]
+        from opentelemetry.sdk.trace import TracerProvider  # type: ignore[reportMissingImports]
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore[reportMissingImports]
+    except Exception as exc:
+        logger.warning("[OBS] telemetry_dependencies_missing error=%s", exc)
+        return None
+
+    return _TelemetryDeps(
+        trace_api=trace,
+        exporter_cls=OTLPSpanExporter,
+        resource_cls=Resource,
+        provider_cls=TracerProvider,
+        processor_cls=BatchSpanProcessor,
+    )
+
+
+def _build_provider(
+    deps: _TelemetryDeps,
+    endpoint: str,
+    headers: dict[str, str],
+    resource_attrs: dict[str, Any],
+) -> bool:
+    global _tracer
+    global _provider
+
+    resource = deps.resource_cls.create(resource_attrs)
+    provider = deps.provider_cls(resource=resource)
+    logger.info(
+        "[OBS] exporter_init exporter=%s endpoint=%s header_keys=%s resource_keys=%s",
+        "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter",
+        endpoint,
+        sorted(headers.keys()),
+        sorted(resource_attrs.keys()),
+    )
+    try:
+        exporter = deps.exporter_cls(
+            endpoint=endpoint,
+            headers=headers,
+        )
+    except TypeError as exc:
+        logger.exception(
+            "[OBS] exporter_init_type_error endpoint=%s header_keys=%s error=%s",
+            endpoint,
+            sorted(headers.keys()),
+            exc,
+        )
         return False
+    except Exception as exc:
+        logger.exception(
+            "[OBS] exporter_init_failed endpoint=%s header_keys=%s error=%s",
+            endpoint,
+            sorted(headers.keys()),
+            exc,
+        )
+        return False
+
+    processor = deps.processor_cls(_LoggingOTLPSpanExporter(exporter))
+    provider.add_span_processor(processor)
+    deps.trace_api.set_tracer_provider(provider)
+    _provider = provider
+    _tracer = deps.trace_api.get_tracer("rm_agent.observability")
+    logger.info("[OBS] tracer_provider_ready processor=%s", "BatchSpanProcessor")
+
+    try:
+        from openinference.instrumentation.langchain import LangChainInstrumentor  # type: ignore[reportMissingImports]
+
+        LangChainInstrumentor().instrument(tracer_provider=provider)
+        logger.info("[OBS] openinference_langchain_instrumented")
+    except Exception as exc:
+        logger.warning("[OBS] openinference_instrumentation_unavailable error=%s", exc)
+
+    return True
+
+
+def _configure_local_observability(deps: _TelemetryDeps) -> bool:
+    endpoint_info = _parse_endpoint(settings.PHOENIX_OTLP_ENDPOINT)
+    logger.info(
+        "[OBS] config mode=local endpoint=%s scheme=%s host=%s port=%s path=%s header_keys=%s",
+        endpoint_info.endpoint,
+        endpoint_info.scheme,
+        endpoint_info.host,
+        endpoint_info.port if endpoint_info.port is not None else "missing",
+        endpoint_info.path,
+        [],
+    )
+
+    reachable, _ = _can_connect(endpoint_info, timeout=0.25)
+    if endpoint_info.host in {"127.0.0.1", "localhost"} and not reachable:
+        logger.warning(
+            "[OBS] phoenix_local_collector_unreachable endpoint=%s tracing_disabled=true",
+            endpoint_info.endpoint,
+        )
+        return False
+
+    resource_attrs: dict[str, Any] = {
+        "service.name": settings.APP_NAME,
+        "service.version": settings.VERSION,
+        "phoenix.project_name": settings.PHOENIX_PROJECT_NAME,
+    }
+    if not _build_provider(
+        deps,
+        endpoint_info.endpoint,
+        {},
+        resource_attrs,
+    ):
+        return False
+
+    logger.info(
+        "[OBS] phoenix_enabled mode=local endpoint=%s project=%s headers=%s",
+        endpoint_info.endpoint,
+        settings.PHOENIX_PROJECT_NAME,
+        [],
+    )
+    return True
+
+
+def _configure_deployed_observability(deps: _TelemetryDeps) -> bool:
+    endpoint_info = _parse_endpoint(settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT)
+    headers = settings.PHOENIX_EFFECTIVE_OTLP_HEADERS
+    logger.info(
+        "[OBS] config mode=deployed endpoint=%s scheme=%s host=%s port=%s path=%s header_keys=%s has_space_id=%s has_api_key=%s",
+        endpoint_info.endpoint,
+        endpoint_info.scheme,
+        endpoint_info.host,
+        endpoint_info.port if endpoint_info.port is not None else "missing",
+        endpoint_info.path,
+        sorted(headers.keys()),
+        bool(settings.PHOENIX_SPACE_ID.strip()),
+        bool(settings.PHOENIX_API_KEY.strip()),
+    )
+
+    reachable, error = _can_connect(endpoint_info, timeout=1.0)
+    if error == "invalid_endpoint":
+        logger.warning(
+            "[OBS] deployed_endpoint_invalid endpoint=%s scheme=%s host=%s port=%s path=%s",
+            endpoint_info.endpoint,
+            endpoint_info.scheme,
+            endpoint_info.host,
+            endpoint_info.port if endpoint_info.port is not None else "missing",
+            endpoint_info.path,
+        )
+    elif not reachable:
+        logger.warning(
+            "[OBS] deployed_endpoint_connectivity_failed endpoint=%s host=%s port=%s error=%s",
+            endpoint_info.endpoint,
+            endpoint_info.host,
+            endpoint_info.port if endpoint_info.port is not None else "missing",
+            error,
+        )
+    else:
+        logger.info(
+            "[OBS] deployed_endpoint_connectivity_ok host=%s port=%s",
+            endpoint_info.host,
+            endpoint_info.port,
+        )
+
+    resource_attrs: dict[str, Any] = {
+        "service.name": settings.APP_NAME,
+        "service.version": settings.VERSION,
+        "model_id": settings.PHOENIX_PROJECT_NAME,
+        "model_version": settings.VERSION,
+    }
+    if not _build_provider(
+        deps,
+        endpoint_info.endpoint,
+        headers,
+        resource_attrs,
+    ):
+        return False
+
+    logger.info(
+        "[OBS] phoenix_enabled mode=deployed endpoint=%s project=%s headers=%s",
+        endpoint_info.endpoint,
+        settings.PHOENIX_PROJECT_NAME,
+        sorted(headers.keys()),
+    )
+    return True
 
 
 def configure_observability() -> None:
@@ -91,68 +310,19 @@ def configure_observability() -> None:
         _observability_initialized = True
         return
 
-    if settings.PHOENIX_LOCAL_MODE and not _is_local_phoenix_endpoint_reachable(settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT):
-        logger.warning(
-            "[OBS] phoenix_local_collector_unreachable endpoint=%s tracing_disabled=true",
-            settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
-        )
+    telemetry_dependencies = _load_telemetry_dependencies()
+    if telemetry_dependencies is None:
         _observability_initialized = True
         return
 
-    try:
-        from opentelemetry import trace  # type: ignore[reportMissingImports]
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[reportMissingImports]
-            OTLPSpanExporter,
-        )
-        from opentelemetry.sdk.resources import Resource  # type: ignore[reportMissingImports]
-        from opentelemetry.sdk.trace import TracerProvider  # type: ignore[reportMissingImports]
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore[reportMissingImports]
-    except Exception as exc:
-        logger.warning("[OBS] telemetry_dependencies_missing error=%s", exc)
-        _observability_initialized = True
-        return
-
-    # Project routing differs per backend: Phoenix groups traces by
-    # `phoenix.project_name`, Arize groups them by `model_id` / `model_version`.
-    resource_attrs: dict[str, Any] = {
-        "service.name": settings.APP_NAME,
-        "service.version": settings.VERSION,
-    }
     if settings.PHOENIX_LOCAL_MODE:
-        resource_attrs["phoenix.project_name"] = settings.PHOENIX_PROJECT_NAME
+        configured = _configure_local_observability(telemetry_dependencies)
     else:
-        resource_attrs["model_id"] = settings.PHOENIX_PROJECT_NAME
-        resource_attrs["model_version"] = settings.VERSION
+        configured = _configure_deployed_observability(telemetry_dependencies)
 
-    resource = Resource.create(resource_attrs)
-    provider = TracerProvider(resource=resource)
-    exporter = OTLPSpanExporter(
-        endpoint=settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
-        headers=settings.PHOENIX_EFFECTIVE_OTLP_HEADERS,
-    )
-    processor = BatchSpanProcessor(_LoggingOTLPSpanExporter(exporter))
-    provider.add_span_processor(processor)
-    trace.set_tracer_provider(provider)
-    _provider = provider
-    _tracer = trace.get_tracer("rm_agent.observability")
-
-    try:
-        from openinference.instrumentation.langchain import LangChainInstrumentor  # type: ignore[reportMissingImports]
-
-        # Bind explicitly to this provider instead of relying on global state.
-        LangChainInstrumentor().instrument(tracer_provider=provider)
-        logger.info("[OBS] openinference_langchain_instrumented")
-    except Exception as exc:
-        logger.warning("[OBS] openinference_instrumentation_unavailable error=%s", exc)
-
-    logger.info(
-        "[OBS] phoenix_enabled mode=%s endpoint=%s project=%s headers=%s",
-        "local" if settings.PHOENIX_LOCAL_MODE else "deployed",
-        settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
-        settings.PHOENIX_PROJECT_NAME,
-        sorted(settings.PHOENIX_EFFECTIVE_OTLP_HEADERS.keys()),
-    )
     _observability_initialized = True
+    if not configured:
+        return
 
 
 def shutdown_observability() -> None:
