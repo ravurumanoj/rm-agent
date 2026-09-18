@@ -237,8 +237,7 @@ def _configure_deployed_observability(deps: _TelemetryDeps) -> bool:
         bool(settings.PHOENIX_API_KEY.strip()),
     )
 
-    reachable, error = _can_connect(endpoint_info, timeout=1.0)
-    if error == "invalid_endpoint":
+    if endpoint_info.host == "missing" or endpoint_info.port is None:
         logger.warning(
             "[OBS] deployed_endpoint_invalid endpoint=%s scheme=%s host=%s port=%s path=%s",
             endpoint_info.endpoint,
@@ -246,20 +245,6 @@ def _configure_deployed_observability(deps: _TelemetryDeps) -> bool:
             endpoint_info.host,
             endpoint_info.port if endpoint_info.port is not None else "missing",
             endpoint_info.path,
-        )
-    elif not reachable:
-        logger.warning(
-            "[OBS] deployed_endpoint_connectivity_failed endpoint=%s host=%s port=%s error=%s",
-            endpoint_info.endpoint,
-            endpoint_info.host,
-            endpoint_info.port if endpoint_info.port is not None else "missing",
-            error,
-        )
-    else:
-        logger.info(
-            "[OBS] deployed_endpoint_connectivity_ok host=%s port=%s",
-            endpoint_info.host,
-            endpoint_info.port,
         )
 
     resource_attrs: dict[str, Any] = {
