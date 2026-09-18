@@ -39,22 +39,44 @@ class _LoggingOTLPSpanExporter:
     def __init__(self, exporter: Any) -> None:
         self._exporter = exporter
 
+    def _exporter_debug_fields(self) -> dict[str, Any]:
+        return {
+            "endpoint": getattr(self._exporter, "_endpoint", settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT),
+            "timeout": getattr(self._exporter, "_timeout", None),
+            "certificate_file": bool(getattr(self._exporter, "_certificate_file", None)),
+            "client_key_file": bool(getattr(self._exporter, "_client_key_file", None)),
+            "client_certificate_file": bool(getattr(self._exporter, "_client_certificate_file", None)),
+            "header_keys": sorted(settings.PHOENIX_EFFECTIVE_OTLP_HEADERS.keys()),
+        }
+
     def export(self, spans: Any) -> Any:
         try:
             result = self._exporter.export(spans)
             result_code = getattr(result, "name", None) or getattr(result, "value", result)
             if str(result_code).upper() not in {"SUCCESS", "0"}:
+                debug_fields = self._exporter_debug_fields()
                 logger.warning(
-                    "[OBS] span_export_failed result=%s span_count=%s endpoint=%s",
+                    "[OBS] span_export_failed result=%s span_count=%s endpoint=%s timeout=%s certificate_file=%s client_key_file=%s client_certificate_file=%s header_keys=%s",
                     result_code,
                     len(spans) if spans is not None else 0,
-                    settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
+                    debug_fields["endpoint"],
+                    debug_fields["timeout"],
+                    debug_fields["certificate_file"],
+                    debug_fields["client_key_file"],
+                    debug_fields["client_certificate_file"],
+                    debug_fields["header_keys"],
                 )
             return result
         except Exception as exc:
+            debug_fields = self._exporter_debug_fields()
             logger.exception(
-                "[OBS] span_export_exception endpoint=%s error=%s",
-                settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT,
+                "[OBS] span_export_exception endpoint=%s timeout=%s certificate_file=%s client_key_file=%s client_certificate_file=%s header_keys=%s error=%s",
+                debug_fields["endpoint"],
+                debug_fields["timeout"],
+                debug_fields["certificate_file"],
+                debug_fields["client_key_file"],
+                debug_fields["client_certificate_file"],
+                debug_fields["header_keys"],
                 exc,
             )
             raise

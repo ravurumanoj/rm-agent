@@ -144,19 +144,25 @@ async def start_sse_listener(
     background_tasks = set()
     semaphore = asyncio.Semaphore(max_concurrent_tasks)
 
-    async for event_data in get_sse_stream():
-        async with httpx.AsyncClient(
-            timeout=30.0,
-            trust_env=False,
-        ) as webhook_client:
-            task = asyncio.create_task(
-                process_event(
-                    event_data,
-                    webhook_url,
-                    webhook_client,
-                    semaphore,
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        trust_env=False,
+    ) as webhook_client:
+        try:
+            async for event_data in get_sse_stream():
+                task = asyncio.create_task(
+                    process_event(
+                        event_data,
+                        webhook_url,
+                        webhook_client,
+                        semaphore,
+                    )
                 )
-            )
 
-            background_tasks.add(task)
-            task.add_done_callback(background_tasks.discard)
+                background_tasks.add(task)
+                task.add_done_callback(background_tasks.discard)
+        except asyncio.CancelledError:
+            for task in list(background_tasks):
+                task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+            raise
