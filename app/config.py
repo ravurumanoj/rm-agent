@@ -104,8 +104,6 @@ class Settings(BaseSettings):
     PHOENIX_DEPLOYED_OTLP_ENDPOINT: str = ""
     PHOENIX_SPACE_ID: str = ""
     PHOENIX_API_KEY: str = ""
-    PHOENIX_SPACE_ID_HEADER: str = "space_id"
-    PHOENIX_API_KEY_HEADER: str = "api_key"
     PHOENIX_CAPTURE_MESSAGE_CONTENT: bool = False
 
     LTM_ENABLED: bool = True
@@ -179,20 +177,10 @@ class Settings(BaseSettings):
             return {}
 
         headers: dict[str, str] = {}
-        if (
-            self.PHOENIX_SPACE_ID.strip()
-            and self.PHOENIX_SPACE_ID_HEADER.strip()
-        ):
-            headers[self.PHOENIX_SPACE_ID_HEADER.strip()] = (
-                self.PHOENIX_SPACE_ID.strip()
-            )
-        if (
-            self.PHOENIX_API_KEY.strip()
-            and self.PHOENIX_API_KEY_HEADER.strip()
-        ):
-            headers[self.PHOENIX_API_KEY_HEADER.strip()] = (
-                self.PHOENIX_API_KEY.strip()
-            )
+        if self.PHOENIX_SPACE_ID.strip():
+            headers["space_id"] = self.PHOENIX_SPACE_ID.strip()
+        if self.PHOENIX_API_KEY.strip():
+            headers["api_key"] = self.PHOENIX_API_KEY.strip()
         return headers
 
     def required_env_keys_for_provider(
