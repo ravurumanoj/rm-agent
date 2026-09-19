@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator, Optional
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 
 from app.config import settings
-from app.services.observability import llm_span, record_exception, record_llm_output
+from app.services.tracing import llm_span, record_exception, record_llm_output
 from app.services.unique_sdk_client import configure_unique_sdk
 from app.utils.logger import logger
 

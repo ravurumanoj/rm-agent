@@ -15,7 +15,7 @@ from app.prompts.relationship_intelligence import (
     RELATIONSHIP_INTELLIGENCE_USER_TEMPLATE,
 )
 from app.schemas.internal import AgentState
-from app.services.observability import operation_span, record_exception
+from app.services.tracing import operation_span, record_exception
 from app.utils.logger import logger
 
 

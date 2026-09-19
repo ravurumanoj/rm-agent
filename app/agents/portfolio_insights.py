@@ -15,7 +15,7 @@ from app.prompts.portfolio_insights import (
     PORTFOLIO_TOOL_COLLECTION_SUFFIX,
 )
 from app.schemas.internal import AgentState
-from app.services.observability import operation_span, record_exception
+from app.services.tracing import operation_span, record_exception
 from app.utils.logger import logger
 
 

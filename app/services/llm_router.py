@@ -12,7 +12,7 @@ from app.services.llm_core import (
     detect_provider,
     invoke_with_retry,
 )
-from app.services.observability import llm_span, record_exception, record_llm_result
+from app.services.tracing import llm_span, record_exception, record_llm_result
 from app.utils.logger import logger
 
 
