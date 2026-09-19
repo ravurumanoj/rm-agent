@@ -29,6 +29,7 @@ class _TelemetryDeps:
 class _ExporterOptions:
     timeout: float
     certificate_file: str | None
+    proxies: dict[str, str] | None
 
 
 @dataclass(frozen=True)
@@ -153,9 +154,17 @@ def _load_telemetry_dependencies() -> _TelemetryDeps | None:
 
 def _resolve_exporter_options() -> _ExporterOptions:
     certificate_file = settings.SSL_CA_CERT_PATH.strip() or None
+    proxies: dict[str, str] = {}
+    http_proxy = settings.HTTP_PROXY.strip() or os.getenv("HTTP_PROXY", "").strip() or os.getenv("http_proxy", "").strip()
+    https_proxy = settings.HTTPS_PROXY.strip() or os.getenv("HTTPS_PROXY", "").strip() or os.getenv("https_proxy", "").strip()
+    if http_proxy:
+        proxies["http"] = http_proxy
+    if https_proxy:
+        proxies["https"] = https_proxy
     return _ExporterOptions(
         timeout=10.0,
         certificate_file=certificate_file,
+        proxies=proxies or None,
     )
 
 
@@ -172,13 +181,14 @@ def _build_provider(
     provider = deps.provider_cls(resource=resource)
     exporter_options = _resolve_exporter_options()
     logger.info(
-        "[OBS] exporter_init exporter=%s endpoint=%s header_keys=%s resource_keys=%s timeout=%s certificate_file=%s has_http_proxy=%s has_https_proxy=%s requests_ca_bundle=%s ssl_cert_file=%s",
+        "[OBS] exporter_init exporter=%s endpoint=%s header_keys=%s resource_keys=%s timeout=%s certificate_file=%s proxy_keys=%s has_http_proxy=%s has_https_proxy=%s requests_ca_bundle=%s ssl_cert_file=%s",
         "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter",
         endpoint,
         sorted(headers.keys()),
         sorted(resource_attrs.keys()),
         exporter_options.timeout,
         bool(exporter_options.certificate_file),
+        sorted(exporter_options.proxies.keys()) if exporter_options.proxies else [],
         bool(os.getenv("HTTP_PROXY") or os.getenv("http_proxy")),
         bool(os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")),
         bool(os.getenv("REQUESTS_CA_BUNDLE")),
@@ -190,24 +200,31 @@ def _build_provider(
             headers=headers,
             timeout=exporter_options.timeout,
             certificate_file=exporter_options.certificate_file,
+            session=None,
         )
+        if exporter_options.proxies:
+            session = getattr(exporter, "_session", None)
+            if session is not None:
+                session.proxies.update(exporter_options.proxies)
     except TypeError as exc:
         logger.exception(
-            "[OBS] exporter_init_type_error endpoint=%s header_keys=%s timeout=%s certificate_file=%s error=%s",
+            "[OBS] exporter_init_type_error endpoint=%s header_keys=%s timeout=%s certificate_file=%s proxy_keys=%s error=%s",
             endpoint,
             sorted(headers.keys()),
             exporter_options.timeout,
             bool(exporter_options.certificate_file),
+            sorted(exporter_options.proxies.keys()) if exporter_options.proxies else [],
             exc,
         )
         return False
     except Exception as exc:
         logger.exception(
-            "[OBS] exporter_init_failed endpoint=%s header_keys=%s timeout=%s certificate_file=%s error=%s",
+            "[OBS] exporter_init_failed endpoint=%s header_keys=%s timeout=%s certificate_file=%s proxy_keys=%s error=%s",
             endpoint,
             sorted(headers.keys()),
             exporter_options.timeout,
             bool(exporter_options.certificate_file),
+            sorted(exporter_options.proxies.keys()) if exporter_options.proxies else [],
             exc,
         )
         return False
