@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import dataclass
-import os
 from urllib.parse import urlparse
 import socket
 from typing import Any
 
 from app.config import settings
-from app.services.tracing import llm_span, operation_span, record_exception, record_llm_output, record_llm_result
 from app.utils.logger import logger
 
 _observability_initialized = False
@@ -23,13 +20,8 @@ class _TelemetryDeps:
     resource_cls: Any
     provider_cls: Any
     processor_cls: Any
-
-
-@dataclass(frozen=True)
-class _ExporterOptions:
-    timeout: float
-    certificate_file: str | None
-    proxies: dict[str, str] | None
+    arize_register: Any | None
+    arize_transport: Any | None
 
 
 @dataclass(frozen=True)
@@ -39,64 +31,6 @@ class _EndpointInfo:
     host: str
     port: int | None
     path: str
-
-
-class _LoggingOTLPSpanExporter:
-    """Wrap OTLP exporter so export failures are surfaced in app logs."""
-
-    def __init__(self, exporter: Any) -> None:
-        self._exporter = exporter
-
-    def _exporter_debug_fields(self) -> dict[str, Any]:
-        return {
-            "endpoint": getattr(self._exporter, "_endpoint", settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT),
-            "timeout": getattr(self._exporter, "_timeout", None),
-            "certificate_file": bool(getattr(self._exporter, "_certificate_file", None)),
-            "client_key_file": bool(getattr(self._exporter, "_client_key_file", None)),
-            "client_certificate_file": bool(getattr(self._exporter, "_client_certificate_file", None)),
-            "header_keys": sorted(settings.PHOENIX_EFFECTIVE_OTLP_HEADERS.keys()),
-        }
-
-    def export(self, spans: Any) -> Any:
-        try:
-            result = self._exporter.export(spans)
-            result_code = getattr(result, "name", None) or getattr(result, "value", result)
-            if str(result_code).upper() not in {"SUCCESS", "0"}:
-                debug_fields = self._exporter_debug_fields()
-                logger.warning(
-                    "[OBS] span_export_failed result=%s span_count=%s endpoint=%s timeout=%s certificate_file=%s client_key_file=%s client_certificate_file=%s header_keys=%s",
-                    result_code,
-                    len(spans) if spans is not None else 0,
-                    debug_fields["endpoint"],
-                    debug_fields["timeout"],
-                    debug_fields["certificate_file"],
-                    debug_fields["client_key_file"],
-                    debug_fields["client_certificate_file"],
-                    debug_fields["header_keys"],
-                )
-            return result
-        except Exception as exc:
-            debug_fields = self._exporter_debug_fields()
-            logger.exception(
-                "[OBS] span_export_exception endpoint=%s timeout=%s certificate_file=%s client_key_file=%s client_certificate_file=%s header_keys=%s error=%s",
-                debug_fields["endpoint"],
-                debug_fields["timeout"],
-                debug_fields["certificate_file"],
-                debug_fields["client_key_file"],
-                debug_fields["client_certificate_file"],
-                debug_fields["header_keys"],
-                exc,
-            )
-            raise
-
-    def shutdown(self) -> Any:
-        return self._exporter.shutdown()
-
-    def force_flush(self, timeout_millis: int = 30000) -> Any:
-        force_flush = getattr(self._exporter, "force_flush", None)
-        if callable(force_flush):
-            return force_flush(timeout_millis=timeout_millis)
-        return True
 
 
 def _parse_endpoint(endpoint: str) -> _EndpointInfo:
@@ -143,28 +77,20 @@ def _load_telemetry_dependencies() -> _TelemetryDeps | None:
         logger.warning("[OBS] telemetry_dependencies_missing error=%s", exc)
         return None
 
+    try:
+        from arize.otel import Transport, register  # type: ignore[reportMissingImports]
+    except Exception:
+        register = None
+        Transport = None
+
     return _TelemetryDeps(
         trace_api=trace,
         exporter_cls=OTLPSpanExporter,
         resource_cls=Resource,
         provider_cls=TracerProvider,
         processor_cls=BatchSpanProcessor,
-    )
-
-
-def _resolve_exporter_options() -> _ExporterOptions:
-    certificate_file = settings.SSL_CA_CERT_PATH.strip() or None
-    proxies: dict[str, str] = {}
-    http_proxy = settings.HTTP_PROXY.strip() or os.getenv("HTTP_PROXY", "").strip() or os.getenv("http_proxy", "").strip()
-    https_proxy = settings.HTTPS_PROXY.strip() or os.getenv("HTTPS_PROXY", "").strip() or os.getenv("https_proxy", "").strip()
-    if http_proxy:
-        proxies["http"] = http_proxy
-    if https_proxy:
-        proxies["https"] = https_proxy
-    return _ExporterOptions(
-        timeout=10.0,
-        certificate_file=certificate_file,
-        proxies=proxies or None,
+        arize_register=register,
+        arize_transport=Transport,
     )
 
 
@@ -179,62 +105,34 @@ def _build_provider(
 
     resource = deps.resource_cls.create(resource_attrs)
     provider = deps.provider_cls(resource=resource)
-    exporter_options = _resolve_exporter_options()
-    logger.info(
-        "[OBS] exporter_init exporter=%s endpoint=%s header_keys=%s resource_keys=%s timeout=%s certificate_file=%s proxy_keys=%s has_http_proxy=%s has_https_proxy=%s requests_ca_bundle=%s ssl_cert_file=%s",
-        "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter",
-        endpoint,
-        sorted(headers.keys()),
-        sorted(resource_attrs.keys()),
-        exporter_options.timeout,
-        bool(exporter_options.certificate_file),
-        sorted(exporter_options.proxies.keys()) if exporter_options.proxies else [],
-        bool(os.getenv("HTTP_PROXY") or os.getenv("http_proxy")),
-        bool(os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")),
-        bool(os.getenv("REQUESTS_CA_BUNDLE")),
-        bool(os.getenv("SSL_CERT_FILE")),
-    )
     try:
         exporter = deps.exporter_cls(
             endpoint=endpoint,
             headers=headers,
-            timeout=exporter_options.timeout,
-            certificate_file=exporter_options.certificate_file,
-            session=None,
+            certificate_file=settings.SSL_CA_CERT_PATH.strip() or None,
         )
-        if exporter_options.proxies:
-            session = getattr(exporter, "_session", None)
-            if session is not None:
-                session.proxies.update(exporter_options.proxies)
-    except TypeError as exc:
-        logger.exception(
-            "[OBS] exporter_init_type_error endpoint=%s header_keys=%s timeout=%s certificate_file=%s proxy_keys=%s error=%s",
-            endpoint,
-            sorted(headers.keys()),
-            exporter_options.timeout,
-            bool(exporter_options.certificate_file),
-            sorted(exporter_options.proxies.keys()) if exporter_options.proxies else [],
-            exc,
-        )
-        return False
     except Exception as exc:
         logger.exception(
-            "[OBS] exporter_init_failed endpoint=%s header_keys=%s timeout=%s certificate_file=%s proxy_keys=%s error=%s",
+            "[OBS] exporter_init_failed endpoint=%s header_keys=%s certificate_file=%s error=%s",
             endpoint,
             sorted(headers.keys()),
-            exporter_options.timeout,
-            bool(exporter_options.certificate_file),
-            sorted(exporter_options.proxies.keys()) if exporter_options.proxies else [],
+            bool(settings.SSL_CA_CERT_PATH.strip()),
             exc,
         )
         return False
 
-    processor = deps.processor_cls(_LoggingOTLPSpanExporter(exporter))
+    processor = deps.processor_cls(exporter)
     provider.add_span_processor(processor)
     deps.trace_api.set_tracer_provider(provider)
     _provider = provider
     _tracer = deps.trace_api.get_tracer("rm_agent.observability")
-    logger.info("[OBS] tracer_provider_ready processor=%s", "BatchSpanProcessor")
+    logger.info(
+        "[OBS] tracer_provider_ready processor=%s endpoint=%s header_keys=%s certificate_file=%s",
+        "BatchSpanProcessor",
+        endpoint,
+        sorted(headers.keys()),
+        bool(settings.SSL_CA_CERT_PATH.strip()),
+    )
 
     try:
         from openinference.instrumentation.langchain import LangChainInstrumentor  # type: ignore[reportMissingImports]
@@ -291,7 +189,6 @@ def _configure_local_observability(deps: _TelemetryDeps) -> bool:
 
 def _configure_deployed_observability(deps: _TelemetryDeps) -> bool:
     endpoint_info = _parse_endpoint(settings.PHOENIX_EFFECTIVE_OTLP_ENDPOINT)
-    headers = settings.PHOENIX_EFFECTIVE_OTLP_HEADERS
     logger.info(
         "[OBS] config mode=deployed endpoint=%s scheme=%s host=%s port=%s path=%s header_keys=%s has_space_id=%s has_api_key=%s",
         endpoint_info.endpoint,
@@ -299,7 +196,7 @@ def _configure_deployed_observability(deps: _TelemetryDeps) -> bool:
         endpoint_info.host,
         endpoint_info.port if endpoint_info.port is not None else "missing",
         endpoint_info.path,
-        sorted(headers.keys()),
+        sorted(settings.PHOENIX_EFFECTIVE_OTLP_HEADERS.keys()),
         bool(settings.PHOENIX_SPACE_ID.strip()),
         bool(settings.PHOENIX_API_KEY.strip()),
     )
@@ -314,27 +211,38 @@ def _configure_deployed_observability(deps: _TelemetryDeps) -> bool:
             endpoint_info.path,
         )
 
-    resource_attrs: dict[str, Any] = {
-        "service.name": settings.APP_NAME,
-        "service.version": settings.VERSION,
-        "model_id": settings.PHOENIX_PROJECT_NAME,
-        "model_version": settings.VERSION,
-    }
-    if not _build_provider(
-        deps,
-        endpoint_info.endpoint,
-        headers,
-        resource_attrs,
-    ):
-        return False
+    if deps.arize_register is not None and deps.arize_transport is not None:
+        try:
+            provider = deps.arize_register(
+                space_id=settings.PHOENIX_SPACE_ID.strip(),
+                api_key=settings.PHOENIX_API_KEY.strip(),
+                endpoint=endpoint_info.endpoint,
+                project_name=settings.PHOENIX_PROJECT_NAME,
+                transport=deps.arize_transport.HTTP,
+            )
+            deps.trace_api.set_tracer_provider(provider)
+            global _provider
+            global _tracer
+            _provider = provider
+            _tracer = deps.trace_api.get_tracer("rm_agent.observability")
+            logger.info(
+                "[OBS] phoenix_enabled mode=deployed endpoint=%s project=%s headers=%s exporter=%s",
+                endpoint_info.endpoint,
+                settings.PHOENIX_PROJECT_NAME,
+                sorted(settings.PHOENIX_EFFECTIVE_OTLP_HEADERS.keys()),
+                "arize.otel.register",
+            )
+            return True
+        except Exception as exc:
+            logger.exception(
+                "[OBS] arize_register_failed endpoint=%s project=%s error=%s",
+                endpoint_info.endpoint,
+                settings.PHOENIX_PROJECT_NAME,
+                exc,
+            )
 
-    logger.info(
-        "[OBS] phoenix_enabled mode=deployed endpoint=%s project=%s headers=%s",
-        endpoint_info.endpoint,
-        settings.PHOENIX_PROJECT_NAME,
-        sorted(headers.keys()),
-    )
-    return True
+    logger.warning("[OBS] arize_register_unavailable tracing_disabled=true")
+    return False
 
 
 def configure_observability() -> None:
