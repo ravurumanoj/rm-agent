@@ -79,6 +79,12 @@ def _get_tracer() -> Any:
     return getattr(obs, "_tracer", None)
 
 
+def _get_provider() -> Any:
+    from app.services import observability as obs
+
+    return getattr(obs, "_provider", None)
+
+
 @contextmanager
 def operation_span(
     span_name: str,
@@ -159,7 +165,23 @@ def record_exception(span: Any, exc: Exception) -> None:
         return
     try:
         span.record_exception(exc)
+        status = getattr(type(span), "Status", None)
+        status_code = getattr(type(span), "StatusCode", None)
+        if status is None or status_code is None:
+            try:
+                from opentelemetry.trace import Status, StatusCode  # type: ignore[reportMissingImports]
+
+                status = Status
+                status_code = StatusCode
+            except Exception:
+                status = None
+                status_code = None
+        if status is not None and status_code is not None:
+            span.set_status(status(status_code.ERROR, str(exc)))
         span.set_attribute("error.type", type(exc).__name__)
         span.set_attribute("error.message", str(exc))
+        provider = _get_provider()
+        if provider is not None:
+            provider.force_flush(timeout_millis=1000)
     except Exception:
         return

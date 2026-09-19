@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "arize-otel>=0.13.0",
     "fastapi>=0.141.1",
     "langchain-core>=1.6.2",
     "langgraph>=1.2.11",

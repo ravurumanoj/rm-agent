@@ -82,7 +82,7 @@ def _load_telemetry_dependencies() -> _TelemetryDeps | None:
     except Exception:
         register = None
         Transport = None
-
+ 
     return _TelemetryDeps(
         trace_api=trace,
         exporter_cls=OTLPSpanExporter,

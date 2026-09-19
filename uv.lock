@@ -180,6 +180,22 @@ wheels = [
 ]
 
 [[package]]
+name = "arize-otel"
+version = "0.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-instrumentation" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9e/70/e318acceb6d7807a376ac126bde32bd9457ddf7a525fdcd629d9672f1bcb/arize_otel-0.13.0.tar.gz", hash = "sha256:6ccd1e26be23a52a0dad2798c924036e2c73a0db086a2214c2817fcfa36a31e6", size = 16799, upload-time = "2026-05-27T20:14:56.61Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/21/8e/2e067e00f27aba8999dd610dada7c119d728a545b32d5381fe7898b32bb4/arize_otel-0.13.0-py3-none-any.whl", hash = "sha256:1748b42d432c6b8013200e62804baa20b0e471a074b1cfe573a9bd0026f6515b", size = 17745, upload-time = "2026-05-27T20:14:55.321Z" },
+]
+
+[[package]]
 name = "arize-phoenix"
 version = "20.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2922,6 +2938,7 @@ name = "rm-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "arize-otel" },
     { name = "fastapi" },
     { name = "langchain-core" },
     { name = "langgraph" },
@@ -2961,6 +2978,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "arize-otel", specifier = ">=0.13.0" },
     { name = "arize-phoenix", marker = "extra == 'phoenix'", specifier = ">=8.0.0" },
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "langchain-core", specifier = ">=1.6.2" },
