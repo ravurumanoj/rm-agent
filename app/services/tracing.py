@@ -85,6 +85,16 @@ def _get_provider() -> Any:
     return getattr(obs, "_provider", None)
 
 
+def _flush_provider(timeout_millis: int = 1000) -> None:
+    provider = _get_provider()
+    if provider is None:
+        return
+    try:
+        provider.force_flush(timeout_millis=timeout_millis)
+    except Exception:
+        return
+
+
 @contextmanager
 def operation_span(
     span_name: str,
@@ -102,7 +112,10 @@ def operation_span(
         if attributes:
             attrs.update(attributes)
         _safe_set_attributes(span, attrs)
-        yield span
+        try:
+            yield span
+        finally:
+            _flush_provider()
 
 
 @contextmanager
@@ -132,7 +145,10 @@ def llm_span(
             for key, value in metadata.items():
                 attrs[f"app.{key}"] = value
         _safe_set_attributes(span, attrs)
-        yield span
+        try:
+            yield span
+        finally:
+            _flush_provider()
 
 
 def record_llm_output(span: Any, output: str, usage: Optional[dict[str, int]] = None) -> None:
@@ -165,23 +181,14 @@ def record_exception(span: Any, exc: Exception) -> None:
         return
     try:
         span.record_exception(exc)
-        status = getattr(type(span), "Status", None)
-        status_code = getattr(type(span), "StatusCode", None)
-        if status is None or status_code is None:
-            try:
-                from opentelemetry.trace import Status, StatusCode  # type: ignore[reportMissingImports]
+        try:
+            from opentelemetry.trace import Status, StatusCode  # type: ignore[reportMissingImports]
 
-                status = Status
-                status_code = StatusCode
-            except Exception:
-                status = None
-                status_code = None
-        if status is not None and status_code is not None:
-            span.set_status(status(status_code.ERROR, str(exc)))
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+        except Exception:
+            pass
         span.set_attribute("error.type", type(exc).__name__)
         span.set_attribute("error.message", str(exc))
-        provider = _get_provider()
-        if provider is not None:
-            provider.force_flush(timeout_millis=1000)
+        _flush_provider()
     except Exception:
         return
