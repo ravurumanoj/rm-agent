@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import os
 from urllib.parse import urlparse
 import socket
 from typing import Any
@@ -22,6 +23,12 @@ class _TelemetryDeps:
     resource_cls: Any
     provider_cls: Any
     processor_cls: Any
+
+
+@dataclass(frozen=True)
+class _ExporterOptions:
+    timeout: float
+    certificate_file: str | None
 
 
 @dataclass(frozen=True)
@@ -144,6 +151,14 @@ def _load_telemetry_dependencies() -> _TelemetryDeps | None:
     )
 
 
+def _resolve_exporter_options() -> _ExporterOptions:
+    certificate_file = settings.SSL_CA_CERT_PATH.strip() or None
+    return _ExporterOptions(
+        timeout=10.0,
+        certificate_file=certificate_file,
+    )
+
+
 def _build_provider(
     deps: _TelemetryDeps,
     endpoint: str,
@@ -155,31 +170,44 @@ def _build_provider(
 
     resource = deps.resource_cls.create(resource_attrs)
     provider = deps.provider_cls(resource=resource)
+    exporter_options = _resolve_exporter_options()
     logger.info(
-        "[OBS] exporter_init exporter=%s endpoint=%s header_keys=%s resource_keys=%s",
+        "[OBS] exporter_init exporter=%s endpoint=%s header_keys=%s resource_keys=%s timeout=%s certificate_file=%s has_http_proxy=%s has_https_proxy=%s requests_ca_bundle=%s ssl_cert_file=%s",
         "opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter",
         endpoint,
         sorted(headers.keys()),
         sorted(resource_attrs.keys()),
+        exporter_options.timeout,
+        bool(exporter_options.certificate_file),
+        bool(os.getenv("HTTP_PROXY") or os.getenv("http_proxy")),
+        bool(os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")),
+        bool(os.getenv("REQUESTS_CA_BUNDLE")),
+        bool(os.getenv("SSL_CERT_FILE")),
     )
     try:
         exporter = deps.exporter_cls(
             endpoint=endpoint,
             headers=headers,
+            timeout=exporter_options.timeout,
+            certificate_file=exporter_options.certificate_file,
         )
     except TypeError as exc:
         logger.exception(
-            "[OBS] exporter_init_type_error endpoint=%s header_keys=%s error=%s",
+            "[OBS] exporter_init_type_error endpoint=%s header_keys=%s timeout=%s certificate_file=%s error=%s",
             endpoint,
             sorted(headers.keys()),
+            exporter_options.timeout,
+            bool(exporter_options.certificate_file),
             exc,
         )
         return False
     except Exception as exc:
         logger.exception(
-            "[OBS] exporter_init_failed endpoint=%s header_keys=%s error=%s",
+            "[OBS] exporter_init_failed endpoint=%s header_keys=%s timeout=%s certificate_file=%s error=%s",
             endpoint,
             sorted(headers.keys()),
+            exporter_options.timeout,
+            bool(exporter_options.certificate_file),
             exc,
         )
         return False
