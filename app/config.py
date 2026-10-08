@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     LLMAAS_BASE_URL: str = ""
     LLMAAS_API_KEY: str = ""
     LLMAAS_MODEL: str = ""
-    LLMAAS_TEMPERATURE: float = 0.7
-    LLMAAS_MAX_TOKENS: int = 8192
+    LLMAAS_TEMPERATURE: float = 0.3
+    LLMAAS_MAX_TOKENS: int = 60000
 
     UNIQUE_API_BASE_URL: str = ""
     UNIQUE_API_VERSION: str = "2023-12-06"
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     UNIQUE_WEBHOOK_EXPECTED_MODULE_NAME: str = ""
     UNIQUE_STEPS_ENABLED: bool = True
     UNIQUE_STREAM_REPLY: bool = False
-    UNIQUE_STREAM_CHUNK_WORDS: int = 20
+    UNIQUE_STREAM_CHUNK_WORDS: int = 40
 
     SSE_ENABLED: bool = False
     SSE_WEBHOOK_URL: str = "http://127.0.0.1:8000/relationship-manager/webhook"
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = ""
     POSTGRES_DATABASE: str = "rm_agent"
-    POSTGRES_ENABLED: bool = True
+    POSTGRES_ENABLED: bool = False
     MEMORY_DATABASE_URL_OVERRIDE: Optional[str] = None
     DB_ECHO: bool = False
     DB_STARTUP_REQUIRED: bool = False
@@ -103,16 +103,16 @@ class Settings(BaseSettings):
     GUARDRAILS_ENABLED: bool = True
     PII_MASKING_ENABLED: bool = False
 
-    PHOENIX_ENABLED: bool = False
+    PHOENIX_ENABLED: bool = True
     PHOENIX_PROJECT_NAME: str = "rm-agent"
     PHOENIX_OTLP_ENDPOINT: str = "http://127.0.0.1:6006/v1/traces"
-    PHOENIX_LOCAL_MODE: bool = True
+    PHOENIX_LOCAL_MODE: bool = False
     PHOENIX_DEPLOYED_OTLP_ENDPOINT: str = ""
     PHOENIX_SPACE_ID: str = ""
     PHOENIX_API_KEY: str = ""
-    PHOENIX_CAPTURE_MESSAGE_CONTENT: bool = False
+    PHOENIX_CAPTURE_MESSAGE_CONTENT: bool = True
 
-    LTM_ENABLED: bool = True
+    LTM_ENABLED: bool = False
     QDRANT_LOCATION: str = ":memory:"
     QDRANT_EPISODIC_COLLECTION: str = "episodic_memory"
     QDRANT_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
@@ -120,21 +120,21 @@ class Settings(BaseSettings):
     EPISODIC_MIN_SCORE: float = 0.30
     EPISODIC_SUMMARY_MAX_LEN: int = 400
 
-    DEFAULT_AGENT_TIMEOUT: int = 60
+    DEFAULT_AGENT_TIMEOUT: int = 600
     MAX_AGENT_ITERATIONS: int = 5
     AGENT_MAX_REPLAN_LOOPS: int = 2
-    AGENT_TOOL_TIMEOUT_SECONDS: float = 30.0
+    AGENT_TOOL_TIMEOUT_SECONDS: float = 300.0
     AGENT_MAX_PARALLEL_TOOL_CALLS: int = 8
     AGENT_EVIDENCE_MAX_CHARS_PER_SOURCE: int = 4000
     AGENT_STRUCTURED_OUTPUT_ATTEMPTS: int = 2
-    ADMIN_AGENT_TIMEOUT_SECONDS: float = 60.0
+    ADMIN_AGENT_TIMEOUT_SECONDS: float = 600.0
     ADMIN_CLM_ASSISTANT_ID: str = "assistant_bpo9dt6zgqei@gv2ay1oozu3"
-    ADMIN_CLM_CHAT_ID: str = "chat_zz6lz1je6v4z3pjyaa8i7fz2"
+    ADMIN_CLM_CHAT_ID: str = ""
     ENABLE_FILE_LOGGING: bool = True
     LOG_FILE: str = "logs/app.log"
     # "short" logs only the first/last LOG_PAYLOAD_EDGE_CHARS chars of prompts, replies and tool results; "full" logs all.
     LOG_PAYLOAD_MODE: str = LOG_PAYLOAD_MODE_SHORT
-    LOG_PAYLOAD_EDGE_CHARS: int = 150
+    LOG_PAYLOAD_EDGE_CHARS: int = 200
 
     @property
     def LOG_PAYLOAD_FULL(self) -> bool:
