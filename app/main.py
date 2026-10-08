@@ -21,6 +21,7 @@ from app.constants import (
 )
 from app.db.session import init_db, ping_db
 from app.routes.agent import router as agent_router
+from app.routes.llm import router as llm_router
 from app.routes.webhook import router as webhook_router
 from app.services.network import configure_network_environment
 from app.services.observability import configure_observability, shutdown_observability
@@ -51,10 +52,11 @@ async def _lifespan(app: FastAPI):
             "port": settings.PORT,
             "log_level": settings.LOG_LEVEL,
             "llm_provider": settings.LLM_PROVIDER,
+            "llm_model": settings.default_model_for(),
             "postgres_enabled": settings.POSTGRES_ENABLED,
             "db_startup_required": settings.DB_STARTUP_REQUIRED,
-            "sse_enabled": getattr(settings, "SSE_ENABLED", False),
-            "has_sse_webhook_url": bool(getattr(settings, "SSE_WEBHOOK_URL", "").strip()),
+            "sse_enabled": settings.SSE_ENABLED,
+            "has_sse_webhook_url": bool(settings.SSE_WEBHOOK_URL.strip()),
             "phoenix_enabled": settings.PHOENIX_ENABLED,
             "phoenix_local_mode": settings.PHOENIX_LOCAL_MODE,
             "enable_file_logging": settings.ENABLE_FILE_LOGGING,
@@ -75,7 +77,7 @@ async def _lifespan(app: FastAPI):
     missing = settings.missing_runtime_settings()
     if missing["provider"]:
         logger.warning(
-            "Missing required provider settings for LLM_PROVIDER=%s: %s",
+            "Missing required LLM settings for LLM_PROVIDER=%s: %s",
             settings.LLM_PROVIDER,
             ", ".join(missing["provider"]),
         )
@@ -99,15 +101,12 @@ async def _lifespan(app: FastAPI):
             raise RuntimeError("Database startup dependency failed") from exc
         logger.error("PostgreSQL database init failed; starting in degraded mode: %s", exc)
 
-    if getattr(settings, "SSE_ENABLED", False):
-        webhook_url = getattr(settings, "SSE_WEBHOOK_URL", "").strip()
+    if settings.SSE_ENABLED:
+        webhook_url = settings.SSE_WEBHOOK_URL.strip()
         if webhook_url:
             logger.info("Starting SSE listener task -> %s", webhook_url)
             sse_task = asyncio.create_task(
-                start_sse_listener(
-                    webhook_url,
-                    getattr(settings, "SSE_MAX_CONCURRENT", 10),
-                ),
+                start_sse_listener(webhook_url, settings.SSE_MAX_CONCURRENT),
                 name="sse-listener",
             )
             sse_task.add_done_callback(_log_sse_task_result)
@@ -116,15 +115,16 @@ async def _lifespan(app: FastAPI):
     else:
         logger.info("SSE listener disabled (SSE_ENABLED is not true)")
 
-    yield
+    try:
+        yield
+    finally:
+        if sse_task is not None:
+            sse_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sse_task
+            logger.info("SSE listener stopped")
 
-    if sse_task is not None:
-        sse_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sse_task
-        logger.info("SSE listener stopped")
-
-    shutdown_observability()
+        shutdown_observability()
 
 
 def _validate_cors(origins: list[str]) -> list[str]:
@@ -198,6 +198,7 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(agent_router)
+    app.include_router(llm_router)
     app.include_router(webhook_router)
 
     @app.exception_handler(Exception)

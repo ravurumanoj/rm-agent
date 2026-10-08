@@ -60,9 +60,19 @@ docker run --rm -p 8000:8000 --env-file .env rm-agent
 
 ## 3. Switchable Concepts (Enable/Disable)
 
-### LLM provider selection
-- `LLM_PROVIDER=openai|gemini|unique_ai`
-- Provider-specific required settings are validated at startup.
+### LLM provider and model
+- `LLM_PROVIDER=unique_ai|openai`. All models of one run are served by that provider.
+- `unique_ai`: model from `UNIQUE_MODEL_NAME` (plus `UNIQUE_API_BASE_URL`, `UNIQUE_APP_ID`, `UNIQUE_APP_KEY`, `UNIQUE_COMPANY_ID`, `UNIQUE_USER_ID`).
+- `openai`: OpenAI-compatible LLM as a service (LLMaaS); the client provides the key.
+  - `LLMAAS_BASE_URL`: endpoint of the service (usually ends with `/v1`); required.
+  - `LLMAAS_MODEL`: model name the service exposes; required.
+  - `LLMAAS_API_KEY`: key provided by the client; required.
+  - `LLMAAS_TEMPERATURE`, `LLMAAS_MAX_TOKENS`: generation settings.
+  - Private networks: `SSL_CA_CERT_PATH` for an internal CA, `SSL_VERIFY=false` for self-signed certificates, `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for proxies.
+  - Requires the extra: `pip install -e ".[openai]"`.
+- `LLM_FALLBACK_MODELS` (optional, comma separated) adds fallback models tried in order on the same provider.
+- Required settings of the active provider are checked at startup and missing ones are logged.
+- Check the setup with `GET /agent/llm/models` and `POST /agent/llm/query` (section 6).
 
 ### Postgres on/off
 - `POSTGRES_ENABLED=true|false`
@@ -106,33 +116,149 @@ Behavior:
 
 ### Feature toggles
 - `MCP_ENABLED`
-- `GRAPH_CHECKPOINTER_ENABLED`
+- `GRAPH_CHECKPOINTER_ENABLED` (short-term memory: history and pending clarification, in-process for now)
 - `AUDIT_ENABLED`
 - `ENTITLEMENTS_ENABLED`
 - `GUARDRAILS_ENABLED`
 - `PII_MASKING_ENABLED`
 - `LTM_ENABLED`
 
+### Agent loop settings
+- `MAX_AGENT_ITERATIONS`: reasoning steps per ReAct agent.
+- `AGENT_MAX_REPLAN_LOOPS`: how many times the sufficiency check may send the flow back to the orchestrator.
+- `AGENT_TOOL_TIMEOUT_SECONDS`, `AGENT_MAX_PARALLEL_TOOL_CALLS`: per-tool timeout and concurrency.
+- `AGENT_EVIDENCE_MAX_CHARS_PER_SOURCE`: cap applied when tool output is rendered as evidence.
+- `AGENT_STRUCTURED_OUTPUT_ATTEMPTS`: LLM attempts to produce valid JSON, with the validation error fed back each time.
+- `ADMIN_AGENT_TIMEOUT_SECONDS`: timeout of the external administrative agent call.
+
 ---
 
-## 4. End-to-End Request Flow (Simple)
+## 4. Architecture: Multi-Agent LangGraph Workflow
 
-1. API receives RM query (`/agent/chat` or `/agent/stream`) or Unique webhook event.
-2. Middleware attaches/propagates correlation ID (`X-Correlation-ID`).
-3. Orchestrator routes request:
-	 - greeting / out_of_scope / portfolio_only / crm_only / both
-4. Portfolio context resolver extracts portfolio IDs from user question.
-5. Clarification gate asks back if required details are missing/ambiguous.
-6. Sub-agents execute tools:
-	 - Portfolio Insights sub-agent
-	 - Relationship Intelligence sub-agent
-7. Multi-portfolio behavior:
-	 - If multiple IDs are selected, sub-agents fan out calls per portfolio ID.
-8. Sufficiency check + optional retry/replan for missing data.
-9. Synthesizer produces grounded final answer.
-10. Citations + evaluations are returned.
+Every RM message runs through one compiled LangGraph (`app/graph/builder.py`). Entry point: `run_turn()` in `app/graph/runner.py`.
 
-If required data is still unavailable after retries, final response explicitly states what section is unavailable.
+```mermaid
+flowchart TD
+    S([START]) --> O{orchestrator}
+    O -->|greeting| DR[direct_reply] --> E([END])
+    O -->|out of scope| SD[safe_decline] --> E
+    O -->|needs clarification| AH[ask_human] --> E
+    O -->|data request| SDP[stage_dispatch]
+    SDP -->|Send per step| PA[portfolio_agent]
+    SDP -->|Send| CA[crm_agent]
+    SDP -->|Send| AA[admin_agent]
+    PA --> SJ[stage_join]
+    CA --> SJ
+    AA --> SJ
+    SJ -->|next stage| SDP
+    SJ -->|all stages done| R[reduce_outputs] --> SU{sufficiency_check}
+    SU -->|replan, or ask the RM| O
+    SU -->|sufficient or partial| F[final_agent] --> E
+```
+
+Print the diagram from the compiled graph with `render_graph_mermaid()` in `app/graph/builder.py`.
+
+### Nodes
+
+| Node | Role |
+|---|---|
+| `orchestrator` | Phase-adaptive LLM decision: intent, entities, execution plan. |
+| `direct_reply`, `safe_decline` | End the turn with the text the orchestrator wrote (greeting, polite decline). |
+| `ask_human` | Ends the turn with the question as the reply; the pending question is saved for the next turn. |
+| `stage_dispatch` / `stage_join` | Run the plan stage by stage; steps in one stage run concurrently (LangGraph `Send`). |
+| `portfolio_agent`, `crm_agent` | ReAct agents: reason, call tools in parallel, observe, repeat (bounded). |
+| `admin_agent` | One call to an external agent (Unique, placeholder for now). |
+| `reduce_outputs` | Renders tool output as evidence text, truncates oversized outputs and numbers the sources. |
+| `sufficiency_check` | One LLM judge: coverage, grounding, re-fetch instructions or a question for the RM. |
+| `final_agent` | Writes the structured markdown answer; only the sources it cites are returned. |
+
+### Execution modes
+
+The plan is a list of stages. One stage with one step is single, one stage with several steps is parallel (independent data), and several stages is sequential (a later agent receives the findings of earlier ones).
+
+### Orchestrator phases
+
+The orchestrator uses one decision schema and a different prompt per phase (`app/prompts/orchestrator/`):
+
+| Phase | When | Prompt |
+|---|---|---|
+| `routing` | Fresh RM message | `routing.py` |
+| `clarification_followup` | The RM is answering a question asked on the previous turn | `clarification_followup.py` |
+| `replan` | Sufficiency asked for a re-fetch | `replan.py` |
+| `human_in_the_loop` | Sufficiency needs input only the RM has | `human_in_the_loop.py` |
+
+The phase is derived from the state (`app/agents/orchestrator/phase.py`). Each phase also states what a valid decision looks like (for example, a replan may only name the agents in the re-fetch instructions).
+
+### LLM-written text, no canned rules
+
+Greetings, polite declines, clarification questions, re-fetch instructions and explanations of missing data are all written by the LLM in the relevant phase. There are no templated replies and no keyword routing fallback. Output is validated by Pydantic schemas; an invalid answer is sent back to the model with the validation error (`AGENT_STRUCTURED_OUTPUT_ATTEMPTS`). If the LLM stays unavailable the turn fails with an error instead of returning a canned answer.
+
+The only deterministic controls are safety limits: the replan cap, the ReAct iteration cap, tool timeouts, and removal of citation markers the model invented.
+
+### Human in the loop
+
+When information is missing, the question is returned as the reply. The pending question is stored in the short-term memory snapshot, and the next message is handled in the `clarification_followup` phase.
+
+### Project layout
+
+```text
+app/
+  components/          reusable, project-independent code (see below)
+  graph/               state, builder, edges, tasks, nodes/, runner
+  agents/              orchestrator/, react_agent, admin_agent, sufficiency, final_agent, formatting
+  prompts/             one file per use case; orchestrator/ has one file per phase plus the registry
+  schemas/             Pydantic contracts with field descriptions
+  tools/               placeholder integrations and the registry that selects them
+  services/            LLM routing, citations, evaluation, tracing, Unique, webhook, SSE
+  routes/              FastAPI routers
+  constants.py         names, labels and fixed limits
+  config.py            environment-driven settings
+```
+
+### Reusable components (`app/components/`)
+
+These depend only on `langchain-core` and `pydantic`, so they can be copied into another project.
+
+| Component | Use |
+|---|---|
+| `structured_output.py` | `invoke_structured(llm, messages, Schema, post_validate=...)`: JSON answer, Pydantic validation, repair retries. |
+| `react/` | `ReActRunner(llm, tools, system_prompt=..., config=ReActConfig(...))`: bounded tool-calling loop with parallel calls, timeouts and duplicate-call protection. |
+| `messages.py` | `extract_text` for model message content. |
+
+### Integrations are placeholders
+
+The portfolio, CRM and administrative tools in `app/tools/` return deterministic dummy text of 100 to 200 characters. To go live, change only `app/tools/registry.py`:
+- `portfolio`: AAA MCP tools
+- `crm`: Outlook MCP and Fano MCP tools
+- `admin`: Unique external agent client
+
+A provider only needs `get_tools() -> list[BaseTool]`; each tool returns a `ToolOutput` (`content` plus `sources`) so citations work unchanged.
+
+### Adding another agent
+
+1. Add its id, display name and capability to `app/constants.py` (`AGENT_*`, `AGENT_TO_NODE`, `AGENT_ORDER`) and to `AgentId` in `app/schemas/orchestrator.py`.
+2. Create the agent (`ReActAgent(agent_id, system_prompt, tool_provider)` or a class with `run(task)`) and its prompt file, then register it in `app/graph/dependencies.py` and `app/graph/builder.py`.
+
+### Testing
+
+```powershell
+python -m pytest
+```
+
+Graph tests use a scripted LLM (`tests/fakes.py`) keyed by prompt phrases, so every phase and loop is tested without a model.
+
+---
+
+## 4a. End-to-End Request Flow (Simple)
+
+1. API receives the RM query (`/agent/chat`, `/agent/stream`) or a Unique webhook event.
+2. Middleware attaches the correlation ID (`X-Correlation-ID`).
+3. `run_turn` restores short-term memory and runs the graph.
+4. The orchestrator replies directly, asks the RM a question, or produces an execution plan.
+5. Agents run the plan stage by stage (parallel inside a stage).
+6. Outputs are reduced to evidence text with numbered sources.
+7. The sufficiency check either approves, loops back to the orchestrator (replan, or a question for the RM), or accepts gaps.
+8. The final agent writes the markdown answer; cited sources and evaluations are returned with it.
 
 ---
 
@@ -143,8 +269,8 @@ If required data is still unavailable after retries, final response explicitly s
 - Health, stream, webhook, model utility APIs.
 
 ### LangGraph concepts
-- Shared `AgentState` orchestration pattern (`router -> clarification -> execute -> synthesize -> evaluate`).
-- Checkpoint-like conversational continuity through in-memory checkpointer.
+- `StateGraph` with conditional edges and `Send` fan-out for parallel agents (see section 4).
+- Conversation history and pending clarification kept by the in-memory checkpointer (Postgres checkpointer is planned).
 
 ### Unique AI SDK (direct usage)
 Used in these backend capabilities:
@@ -165,9 +291,9 @@ Used in these backend capabilities:
 Current tracing is not limited to one endpoint. The backend now emits spans across these layers:
 - API boundary spans for `POST /agent/chat`, `POST /agent/stream`, and `POST /relationship-manager/webhook`
 - Turn/workflow spans for the orchestrator lifecycle
-- Node-level spans for router, query-details resolution, clarification, execution, synthesizer, and evaluation
-- Execution-mode spans for parallel and sequential sub-agent runs
-- Tool spans for portfolio/CRM tool invocation
+- Node-level spans for every graph node (`graph.node.<name>`)
+- Agent spans for the ReAct agents and the administrative external call
+- Tool-call timings are recorded on each agent result
 - LLM spans for router-managed providers and direct Unique SDK calls
 - Webhook SDK spans for signature verification and assistant-message writeback
 - Shutdown flush so buffered spans are exported on app stop
@@ -208,8 +334,10 @@ Recommended enterprise validation:
 - `POST /relationship-manager/webhook`: Unique-compatible webhook.
 - `GET /relationship-manager/webhook/events`: webhook lifecycle SSE stream.
 - `GET /relationship-manager/webhook/events/recent`: recent webhook events.
-- `GET /agent/unique/models`: list Unique models.
-- `POST /agent/unique/models/test`: test a specific Unique model.
+- `GET /agent/llm/models`: models this app supports for the active provider (the configured model, plus fallbacks if set).
+- `POST /agent/llm/query`: send `{"query": "...", "model": "optional"}` to a supported model (defaults to the primary) and get `{"response", "model", "latency_ms"}`. An unsupported model returns 400 and a failing model call returns 502 with the error in `detail`.
+- `GET /agent/unique/models`: list models available on the Unique platform.
+- `POST /agent/unique/models/test`: test any Unique platform model.
 
 ---
 
@@ -226,13 +354,11 @@ This correlation ID is complementary to OpenTelemetry tracing:
 
 ---
 
-## 8. Multi-Portfolio Dynamic Handling
+## 8. Scoping with Request Metadata
 
-What is implemented:
-- Portfolio IDs are extracted from RM query text.
-- IDs are validated against active portfolio scope when provided.
-- If query asks for multiple portfolio IDs, sub-agents perform per-ID calls.
-- If any requested ID is unmatched, assistant asks clarification instead of silently dropping IDs.
+The orchestrator (LLM) extracts the client, portfolio IDs, time range and topics from the message. When the message does not name them, it copies `client_id` and the active portfolio IDs from the request metadata; IDs the RM states explicitly win. If a mandatory detail is still missing (for example several active portfolios and none named), the RM is asked a question.
+
+Agents call tools once per portfolio ID when several are in scope; scoping rules live in the agent prompts, not in code.
 
 Expected metadata for best behavior:
 - `active_portfolios`: list of portfolio objects with `id`.
@@ -254,6 +380,8 @@ Example request:
 }
 ```
 
+The request field `tool_outputs` is accepted for compatibility but ignored; agents fetch their own data.
+
 ---
 
 ## 9. Setup Notes
@@ -267,7 +395,7 @@ pip install -e ".[dev]"
 Optional extras:
 
 ```powershell
-pip install -e ".[unique,openai,gemini,phoenix,dev]"
+pip install -e ".[unique,openai,phoenix,dev]"
 ```
 
 Phoenix local server:

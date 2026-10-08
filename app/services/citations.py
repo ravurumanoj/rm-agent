@@ -3,18 +3,19 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable, Optional
 
-from app.schemas.citations import CitationChunk, CitationReference
+from app.schemas.citations import CitationChunk, CitationReference, ContentReference
 from app.utils.logger import logger
 
 
 SOURCE_MARKER_PATTERN = r"\[source(\d+)\]"
+DEFAULT_REFERENCE_SOURCE = "rm-agent"
 
 
-class CitationManager:
-    """Collect chunks and assign stable incremental source markers.
+class ReferenceManager:
+    """Track source chunks and build message references the way Unique's ReferenceManager does.
 
-    This mirrors the toolkit-style behavior where source numbering is maintained
-    across iterations and only cited sources are returned to the client.
+    Chunks come from tool output, never from the LLM: each gets a stable [sourceN] marker, the LLM only cites
+    markers, and the reference details (name, url, source id) are looked up from the registered chunk.
     """
 
     def __init__(self, start_index: int = 1, marker_template: str = "source{n}") -> None:
@@ -23,6 +24,24 @@ class CitationManager:
         self._next_index = start_index
         self._marker_template = marker_template
         self._references: list[CitationReference] = []
+
+    @classmethod
+    def from_citations(cls, citations: Iterable[dict[str, Any]]) -> "ReferenceManager":
+        """Rebuild a manager from citation dicts that already carry their source numbers."""
+        manager = cls()
+        for item in citations:
+            manager._references.append(
+                CitationReference(
+                    source_number=int(item["source_number"]),
+                    marker=str(item["marker"]),
+                    content_id=str(item.get("content_id", "")),
+                    title=str(item.get("title", "")),
+                    snippet=str(item.get("snippet", "")),
+                    uri=str(item.get("uri", "")),
+                    metadata=dict(item.get("metadata") or {}),
+                )
+            )
+        return manager
 
     @property
     def references(self) -> list[CitationReference]:
@@ -35,9 +54,15 @@ class CitationManager:
         self._references.clear()
 
     def register_chunks(self, chunks: Iterable[CitationChunk], snippet_max_len: int = 280) -> list[CitationReference]:
-        """Register chunks and return assigned references."""
+        """Register chunks and return their references; a chunk seen before keeps its first marker."""
+        by_content_id = {ref.content_id: ref for ref in self._references}
         registered: list[CitationReference] = []
         for chunk in chunks:
+            existing = by_content_id.get(chunk.content_id)
+            if existing is not None:
+                registered.append(existing)
+                continue
+
             marker = self._marker_template.format(n=self._next_index)
             snippet = (chunk.text or "").strip()
             if len(snippet) > snippet_max_len:
@@ -53,6 +78,7 @@ class CitationManager:
                 metadata=dict(chunk.metadata),
             )
             self._references.append(ref)
+            by_content_id[chunk.content_id] = ref
             registered.append(ref)
             self._next_index += 1
         logger.debug("[CITATION] registered_chunks=%s total_references=%s", len(registered), len(self._references))
@@ -99,6 +125,43 @@ class CitationManager:
             else:
                 lines.append(f"{ref.marker} {ref.title or ref.content_id}")
         return "\n".join(lines)
+
+    def to_message_references(self, answer_text: str) -> tuple[str, list[ContentReference]]:
+        """Turn [sourceN] markers into <sup>k</sup> and return the matching message references.
+
+        k is the order of first appearance in the text, so the UI shows 1, 2, 3 whatever the marker numbers are.
+        """
+        by_number = {ref.source_number: ref for ref in self._references}
+        sequence: dict[int, int] = {}
+        references: list[ContentReference] = []
+
+        def replace(match: re.Match[str]) -> str:
+            number = int(match.group(1))
+            ref = by_number.get(number)
+            if ref is None:
+                return ""
+            if number not in sequence:
+                sequence[number] = len(sequence) + 1
+                references.append(
+                    ContentReference(
+                        name=ref.title or ref.content_id,
+                        url=ref.uri,
+                        sequence_number=sequence[number],
+                        source_id=ref.content_id,
+                        source=str(
+                            ref.metadata.get("source")
+                            or ref.metadata.get("tool")
+                            or ref.metadata.get("agent")
+                            or DEFAULT_REFERENCE_SOURCE
+                        ),
+                        original_index=[number],
+                        description=ref.snippet,
+                    )
+                )
+            return f"<sup>{sequence[number]}</sup>"
+
+        text = re.sub(SOURCE_MARKER_PATTERN, replace, answer_text or "", flags=re.IGNORECASE)
+        return text, references
 
 
 def coerce_citation_chunk(raw: dict[str, Any]) -> CitationChunk:

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChatRequest(BaseModel):
@@ -77,12 +79,22 @@ class WebhookAssistantMessage(BaseModel):
 class WebhookPayload(BaseModel):
     model_config = {"extra": "allow"}
 
+    name: str = ""
+    description: str = ""
     chatId: str = ""
     assistantId: str = ""
     text: str = ""
     userMessage: WebhookUserMessage = Field(default_factory=WebhookUserMessage)
     assistantMessage: WebhookAssistantMessage = Field(default_factory=WebhookAssistantMessage)
     configuration: dict = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_lowercase_chat_id(cls, data: Any) -> Any:
+        # The external-module docs spell the key "chatid"; the user-message event uses "chatId".
+        if isinstance(data, dict) and not data.get("chatId") and data.get("chatid"):
+            return {**data, "chatId": data["chatid"]}
+        return data
 
 
 class WebhookEvent(BaseModel):

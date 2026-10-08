@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 from app.schemas.evaluation import EvaluationContext, EvaluationResult, EvaluationSeverity
-from app.services.citations import CitationManager
+from app.services.citations import ReferenceManager
 from app.utils.logger import logger
 
 
@@ -52,7 +52,7 @@ class CitationConsistencyEvaluation(ResponseEvaluation):
         self._require_citation_when_available = require_citation_when_available
 
     async def evaluate(self, context: EvaluationContext) -> EvaluationResult:
-        manager = CitationManager()
+        manager = ReferenceManager()
         used = manager.extract_cited_source_numbers(context.answer, pattern=self._citation_pattern)
         available: set[int] = set()
         for ref in context.citations:

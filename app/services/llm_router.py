@@ -1,38 +1,42 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import time
 from typing import Any, AsyncIterator, Callable, Optional
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 
+from app.components.messages import extract_text
 from app.config import settings
 from app.services.llm_core import (
     ProviderUnavailableError,
     create_service_for_model,
-    detect_provider,
     invoke_with_retry,
 )
 from app.services.tracing import llm_span, record_exception, record_llm_result
-from app.utils.logger import logger
+from app.utils.logger import logger, preview
 
 
 class LLMRouter:
-    """Route LLM calls across model/provider chain with fallback."""
+    """Route LLM calls across a model chain with fallback, all served by one provider."""
 
     def __init__(
         self,
         models: list[str],
         bound_tools: Optional[list] = None,
-        service_factory: Callable = create_service_for_model,
+        service_factory: Optional[Callable] = None,
         max_retries: Optional[int] = None,
         base_delay: Optional[float] = None,
         backoff_multiplier: Optional[float] = None,
         max_delay: Optional[float] = None,
+        provider: Optional[str] = None,
     ) -> None:
         self._models = list(models)
         self._bound_tools = list(bound_tools or [])
         self._cache: dict[str, Any] = {}
-        self._service_factory = service_factory
+        self._provider = (provider or settings.LLM_PROVIDER).strip().lower()
+        self._service_factory = service_factory or functools.partial(create_service_for_model, provider=self._provider)
         self._max_retries = settings.LLM_MAX_RETRIES if max_retries is None else max_retries
         self._base_delay = settings.LLM_RETRY_BASE_DELAY if base_delay is None else base_delay
         self._backoff_multiplier = (
@@ -47,7 +51,13 @@ class LLMRouter:
 
     async def _invoke_one(self, model: str, messages: list[BaseMessage], **kwargs) -> AIMessage:
         svc = self._svc(model)
-        provider = detect_provider(model)
+        provider = self._provider
+        logger.debug(
+            "[LLM] request model=%s provider=%s messages=%s tools=%s last_input=%s",
+            model, provider, len(messages), len(self._bound_tools),
+            preview(extract_text(messages[-1].content)) if messages else "",
+        )
+        started = time.perf_counter()
         with llm_span(
             "llm.ainvoke",
             model=model,
@@ -68,6 +78,11 @@ class LLMRouter:
                         provider_name=model,
                     )
                 record_llm_result(span, result)
+                logger.info(
+                    "[LLM] response model=%s duration_ms=%s tool_calls=%s output=%s",
+                    model, int((time.perf_counter() - started) * 1000),
+                    len(getattr(result, "tool_calls", None) or []), preview(extract_text(result.content)),
+                )
                 if span is not None:
                     span.set_attribute("llm.success", True)
                 return result
@@ -97,7 +112,7 @@ class LLMRouter:
         last_exc: Exception | None = None
         for model in self._models:
             yielded_any = False
-            provider = detect_provider(model)
+            provider = self._provider
             try:
                 with llm_span(
                     "llm.astream",
@@ -116,6 +131,7 @@ class LLMRouter:
                             yield chunk
                         if collected_chunks:
                             record_llm_result(span, AIMessage(content="".join(collected_chunks)))
+                            logger.info("[LLM] stream_completed model=%s output=%s", model, preview("".join(collected_chunks)))
                         if span is not None:
                             span.set_attribute("llm.success", True)
                     except Exception as exc:
@@ -160,4 +176,5 @@ class LLMRouter:
             base_delay=self._base_delay,
             backoff_multiplier=self._backoff_multiplier,
             max_delay=self._max_delay,
+            provider=self._provider,
         )

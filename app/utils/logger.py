@@ -4,7 +4,13 @@ import sys
 from contextvars import ContextVar, Token
 from pathlib import Path
 
+from app.components.text_preview import configure_preview, preview
 from app.config import settings
+
+__all__ = ["logger", "preview", "configure_logging", "get_correlation_id", "set_correlation_id", "reset_correlation_id"]
+
+# app.components uses stdlib loggers (it must not import app.*); they share the app handlers.
+_COMPONENTS_LOGGER_NAME = "app.components"
 
 
 _correlation_id_ctx: ContextVar[str] = ContextVar("correlation_id", default="-")
@@ -73,8 +79,13 @@ def get_correlation_id() -> str:
     """Return currently bound correlation id for this execution context."""
     return _correlation_id_ctx.get()
 
+def _apply_payload_settings() -> None:
+    configure_preview(full=settings.LOG_PAYLOAD_FULL, edge_chars=settings.LOG_PAYLOAD_EDGE_CHARS)
+
+
 def setup_logger(name: str = "rm_agent", level: int = logging.INFO) -> logging.Logger:
     """Setup app logger with common metadata in each line."""
+    _apply_payload_settings()
     app_logger = logging.getLogger(name)
     app_logger.setLevel(level)
 
@@ -105,6 +116,11 @@ def setup_logger(name: str = "rm_agent", level: int = logging.INFO) -> logging.L
 
     app_logger.propagate = False
 
+    components_logger = logging.getLogger(_COMPONENTS_LOGGER_NAME)
+    components_logger.setLevel(level)
+    components_logger.handlers = list(app_logger.handlers)
+    components_logger.propagate = False
+
     return app_logger
 
 
@@ -113,6 +129,8 @@ logger = setup_logger()
 
 def configure_logging(level: int = logging.INFO) -> None:
     """Configure app logger level at startup."""
+    _apply_payload_settings()
     logger.setLevel(level)
+    logging.getLogger(_COMPONENTS_LOGGER_NAME).setLevel(level)
     for handler in logger.handlers:
         handler.setLevel(level)

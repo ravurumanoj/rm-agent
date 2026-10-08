@@ -18,7 +18,7 @@ def _safe_set_attributes(span: Any, attributes: dict[str, Any]) -> None:
             span.set_attribute(key, str(value))
 
 
-def _message_preview(messages: list[BaseMessage], max_len: int = 400) -> str:
+def _message_preview(messages: list[BaseMessage], max_len: int = 10000) -> str:
     if not messages:
         return ""
     first = messages[-1]

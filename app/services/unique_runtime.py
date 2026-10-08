@@ -5,9 +5,10 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from app.config import settings
+from app.constants import LLM_PROVIDER_UNIQUE
 from app.services.llm import get_llm
 from app.services.unique_sdk_client import configure_unique_sdk
-from app.utils.logger import logger
+from app.utils.logger import logger, preview
 
 try:
     import unique_sdk  # type: ignore[reportMissingImports]
@@ -90,13 +91,15 @@ def list_unique_models() -> list[dict[str, Any]]:
 
 async def test_unique_model(model: str, query: str, *, company_id: str = "", user_id: str = "") -> str:
     """Invoke one Unique model with the provided query and return plain text."""
-    logger.info("[UNIQUE] test_model_started model=%s", model)
-    llm = get_llm(provider="unique_ai", model=model, fallback_models=[])
+    logger.info("[UNIQUE] test_model_started model=%s query=%s", model, preview(query))
+    llm = get_llm(provider=LLM_PROVIDER_UNIQUE, model=model, fallback_models=[])
     response = await llm.ainvoke(
         [HumanMessage(content=query)],
         company_id=(company_id or "").strip() or None,
         user_id=(user_id or "").strip() or None,
     )
     text = str(response.content or "")
-    logger.info("[UNIQUE] test_model_completed model=%s response_length=%s", model, len(text))
+    logger.info(
+        "[UNIQUE] test_model_completed model=%s response_length=%s response=%s", model, len(text), preview(text)
+    )
     return text

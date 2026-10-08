@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from app.config import settings
 from app.services.llm_core import (
     ProviderUnavailableError,
+    active_provider,
     build_model_chain,
     configure_proxy_env,
-    detect_provider,
     parse_fallback_models,
     resolve_primary_model,
 )
@@ -27,25 +26,22 @@ def get_llm(
     backoff_multiplier: Optional[float] = None,
     max_delay: Optional[float] = None,
 ) -> LLMRouter:
-    """Build a lazy LLM router using optional overrides and config defaults.
-
-    All arguments are optional. If omitted, values are resolved from settings.
-    """
+    """Build a lazy LLM router; omitted arguments come from settings."""
     configure_proxy_env()
     configure_observability()
 
-    primary = resolve_primary_model(provider=provider, model=model)
-    fallbacks = parse_fallback_models(fallback_models)
-    model_chain = build_model_chain(primary, fallbacks)
-
+    provider = active_provider(provider)
+    model_chain = build_model_chain(resolve_primary_model(provider, model), parse_fallback_models(fallback_models))
     logger.info(
-        "LLM router initialized with primary=%s%s",
+        "LLM router initialized provider=%s primary=%s%s",
+        provider,
         model_chain[0],
         f", fallbacks={model_chain[1:]}" if len(model_chain) > 1 else ", no fallbacks",
     )
 
     return LLMRouter(
         models=model_chain,
+        provider=provider,
         bound_tools=bound_tools,
         max_retries=max_retries,
         base_delay=base_delay,
@@ -54,4 +50,4 @@ def get_llm(
     )
 
 
-__all__ = ["get_llm", "LLMRouter", "ProviderUnavailableError", "detect_provider"]
+__all__ = ["get_llm", "LLMRouter", "ProviderUnavailableError"]

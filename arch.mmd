@@ -1,0 +1,16 @@
+flowchart TD
+    S([START]) --> O{orchestrator}
+    O -->|greeting| DR[direct_reply] --> E([END])
+    O -->|out of scope| SD[safe_decline] --> E
+    O -->|needs clarification| AH[ask_human] --> E
+    O -->|data request| SDP[stage_dispatch]
+    SDP -->|Send, one per step| PA[portfolio_agent]
+    SDP -->|Send| CA[crm_agent]
+    SDP -->|Send| AA[admin_agent]
+    PA --> SJ[stage_join]
+    CA --> SJ
+    AA --> SJ
+    SJ -->|next stage| SDP
+    SJ -->|done| R[reduce_outputs] --> SU{sufficiency_check}
+    SU -->|replan or ask human| O
+    SU -->|sufficient or partial| F[final_agent] --> E

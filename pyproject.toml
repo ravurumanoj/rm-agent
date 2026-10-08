@@ -13,6 +13,9 @@ dependencies = [
     "langchain-core>=1.6.2",
     "langgraph>=1.2.11",
     "langgraph-checkpoint-postgres>=3.1.2",
+    "openinference-instrumentation-langchain>=0.1.30",
+    "opentelemetry-exporter-otlp>=1.38.0",
+    "opentelemetry-sdk>=1.38.0",
     "psycopg[binary]>=3.3.5",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
@@ -43,9 +46,6 @@ unique = [
 ]
 openai = [
     "langchain-openai>=1.6.1",
-]
-gemini = [
-    "langchain-google-genai>=4.4.0",
 ]
 phoenix = [
     "arize-phoenix>=8.0.0",

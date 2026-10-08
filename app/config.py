@@ -1,15 +1,10 @@
 import os
 from pathlib import Path
-
-from typing import Optional
+from typing import ClassVar, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.constants import (
-    LLM_PROVIDER_GEMINI,
-    LLM_PROVIDER_OPENAI,
-    LLM_PROVIDER_UNIQUE,
-)
+from app.constants import LLM_PROVIDER_OPENAI, LLM_PROVIDER_UNIQUE, LOG_PAYLOAD_MODE_FULL, LOG_PAYLOAD_MODE_SHORT
 
 
 _DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
@@ -30,7 +25,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "rm-agent"
     API_V1_STR: str = ""
     VERSION: str = "0.1.0"
-    DESCRIPTION: str = "Agentic AI FastAPI assistant for relationship managers."
+    DESCRIPTION: str = "Agentic AI assistant for relationship managers."
     DEBUG: bool = False
     RELOAD: bool = False
     HOST: str = "0.0.0.0"
@@ -38,8 +33,15 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "info"
     BACKEND_CORS_ORIGINS: list[str] = []
 
-    LLM_PROVIDER: str = "openai"
+    LLM_PROVIDER: str = LLM_PROVIDER_UNIQUE
     LLM_FALLBACK_MODELS: str = ""
+
+    # LLM-as-a-service (LLMaaS) endpoint exposing the OpenAI API; the client provides the key.
+    LLMAAS_BASE_URL: str = ""
+    LLMAAS_API_KEY: str = ""
+    LLMAAS_MODEL: str = ""
+    LLMAAS_TEMPERATURE: float = 0.7
+    LLMAAS_MAX_TOKENS: int = 8192
 
     UNIQUE_API_BASE_URL: str = ""
     UNIQUE_API_VERSION: str = "2023-12-06"
@@ -51,11 +53,16 @@ class Settings(BaseSettings):
     UNIQUE_WEBHOOK_VERIFY_SIGNATURE: bool = False
     UNIQUE_WEBHOOK_ENDPOINT_SECRET: str = ""
     UNIQUE_WEBHOOK_EXPECTED_MODULE_NAME: str = ""
+    UNIQUE_STEPS_ENABLED: bool = True
+    UNIQUE_STREAM_REPLY: bool = False
+    UNIQUE_STREAM_CHUNK_WORDS: int = 20
 
     SSE_ENABLED: bool = False
     SSE_WEBHOOK_URL: str = "http://127.0.0.1:8000/relationship-manager/webhook"
     SSE_MAX_CONCURRENT: int = 10
-    SUBSCRIPTIONS: list[str] = []
+    SSE_URL: str = ""
+    SSE_SUBSCRIPTIONS: str = "unique.chat.external-module.chosen"  # comma-separated
+    SSE_ASSISTANT_ID: str = ""  # blank: accept events for any assistant
 
     LLM_MAX_RETRIES: int = 3
     LLM_RETRY_BASE_DELAY: float = 1.0
@@ -68,7 +75,6 @@ class Settings(BaseSettings):
     HTTPS_PROXY: str = ""
     NO_PROXY: str = ""
 
-    EMBEDDING_MODEL: str = "models/gemini-embedding-001"
     MEMORY_STORAGE_PATH: str = "data/memory/sessions.json"
     LONG_TERM_MEMORY_PATH: str = "data/memory/long_term_memory.json"
 
@@ -116,19 +122,23 @@ class Settings(BaseSettings):
 
     DEFAULT_AGENT_TIMEOUT: int = 60
     MAX_AGENT_ITERATIONS: int = 5
+    AGENT_MAX_REPLAN_LOOPS: int = 2
+    AGENT_TOOL_TIMEOUT_SECONDS: float = 30.0
+    AGENT_MAX_PARALLEL_TOOL_CALLS: int = 8
+    AGENT_EVIDENCE_MAX_CHARS_PER_SOURCE: int = 4000
+    AGENT_STRUCTURED_OUTPUT_ATTEMPTS: int = 2
+    ADMIN_AGENT_TIMEOUT_SECONDS: float = 60.0
+    ADMIN_CLM_ASSISTANT_ID: str = "assistant_bpo9dt6zgqei@gv2ay1oozu3"
+    ADMIN_CLM_CHAT_ID: str = "chat_zz6lz1je6v4z3pjyaa8i7fz2"
     ENABLE_FILE_LOGGING: bool = True
     LOG_FILE: str = "logs/app.log"
+    # "short" logs only the first/last LOG_PAYLOAD_EDGE_CHARS chars of prompts, replies and tool results; "full" logs all.
+    LOG_PAYLOAD_MODE: str = LOG_PAYLOAD_MODE_SHORT
+    LOG_PAYLOAD_EDGE_CHARS: int = 150
 
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4o"
-    OPENAI_TEMPERATURE: float = 0.7
-    OPENAI_MAX_TOKENS: int = 8192
-    OPENAI_BASE_URL: str = ""
-
-    GOOGLE_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-1.5-pro"
-    GEMINI_TEMPERATURE: float = 0.7
-    GEMINI_MAX_TOKENS: int = 8192
+    @property
+    def LOG_PAYLOAD_FULL(self) -> bool:
+        return self.LOG_PAYLOAD_MODE.strip().lower() == LOG_PAYLOAD_MODE_FULL
 
     @property
     def LLM_FALLBACK_MODELS_LIST(self) -> list:
@@ -183,27 +193,29 @@ class Settings(BaseSettings):
             headers["api_key"] = self.PHOENIX_API_KEY.strip()
         return headers
 
-    def required_env_keys_for_provider(
-        self,
-        provider: Optional[str] = None,
-    ) -> list[str]:
-        """Return required environment keys for the selected LLM provider."""
+    REQUIRED_UNIQUE_KEYS: ClassVar[tuple[str, ...]] = (
+        "UNIQUE_API_BASE_URL",
+        "UNIQUE_MODEL_NAME",
+        "UNIQUE_APP_ID",
+        "UNIQUE_APP_KEY",
+        "UNIQUE_COMPANY_ID",
+        "UNIQUE_USER_ID",
+    )
 
-        active = (provider or self.LLM_PROVIDER or "").lower().strip()
-        if active == LLM_PROVIDER_OPENAI:
-            return ["OPENAI_API_KEY"]
-        if active == LLM_PROVIDER_GEMINI:
-            return ["GOOGLE_API_KEY"]
-        if active == LLM_PROVIDER_UNIQUE:
+    def default_model_for(self, provider: Optional[str] = None) -> str:
+        """Configured model name of the given (default: active) LLM provider."""
+        active = (provider or self.LLM_PROVIDER).strip().lower()
+        return (self.LLMAAS_MODEL if active == LLM_PROVIDER_OPENAI else self.UNIQUE_MODEL_NAME).strip()
+
+    def missing_llm_settings(self) -> list[str]:
+        """Required settings of the active LLM provider that are not set."""
+        if self.LLM_PROVIDER.strip().lower() == LLM_PROVIDER_OPENAI:
             return [
-                "UNIQUE_API_BASE_URL",
-                "UNIQUE_MODEL_NAME",
-                "UNIQUE_APP_ID",
-                "UNIQUE_APP_KEY",
-                "UNIQUE_COMPANY_ID",
-                "UNIQUE_USER_ID",
+                key
+                for key in ("LLMAAS_BASE_URL", "LLMAAS_API_KEY", "LLMAAS_MODEL")
+                if not str(getattr(self, key, "")).strip()
             ]
-        return []
+        return [key for key in self.REQUIRED_UNIQUE_KEYS if not str(getattr(self, key, "")).strip()]
 
     def missing_runtime_settings(self) -> dict[str, list[str]]:
         """Return missing runtime keys grouped by concern.
@@ -211,35 +223,7 @@ class Settings(BaseSettings):
         This is intentionally non-throwing so the app can boot in
         scaffold mode.
         """
-        missing_provider: list[str] = []
-        active = (self.LLM_PROVIDER or "").lower().strip()
-        if active == LLM_PROVIDER_UNIQUE:
-            base_keys = [
-                "UNIQUE_API_BASE_URL",
-                "UNIQUE_MODEL_NAME",
-                "UNIQUE_APP_ID",
-                "UNIQUE_APP_KEY",
-            ]
-            missing_provider.extend(
-                [
-                    key
-                    for key in base_keys
-                    if not str(getattr(self, key, "")).strip()
-                ]
-            )
-            if not self.UNIQUE_COMPANY_ID.strip():
-                missing_provider.append("UNIQUE_COMPANY_ID")
-            if not self.UNIQUE_USER_ID.strip():
-                missing_provider.append("UNIQUE_USER_ID")
-        else:
-            missing_provider.extend(
-                [
-                    key
-                    for key in self.required_env_keys_for_provider()
-                    if not str(getattr(self, key, "")).strip()
-                ]
-            )
-
+        missing_provider = self.missing_llm_settings()
         missing_mcp: list[str] = []
         if self.MCP_ENABLED and not self.MCP_EFFECTIVE_SERVER_URL.strip():
             missing_mcp.append(

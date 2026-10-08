@@ -28,6 +28,32 @@ class CitationReference:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ContentReference:
+    """Message reference in the shape Unique's Message.Reference expects."""
+
+    name: str
+    url: str
+    sequence_number: int
+    source_id: str
+    source: str
+    original_index: list[int]
+    description: str = ""
+
+    def to_unique(self) -> dict[str, Any]:
+        reference: dict[str, Any] = {
+            "name": self.name,
+            "url": self.url or None,
+            "sequenceNumber": self.sequence_number,
+            "originalIndex": self.original_index,
+            "sourceId": self.source_id,
+            "source": self.source,
+        }
+        if self.description:
+            reference["description"] = self.description
+        return reference
+
+
 @dataclass
 class SSEEvent:
     id: str

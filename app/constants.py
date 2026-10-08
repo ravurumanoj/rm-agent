@@ -7,82 +7,128 @@ OPENAPI_URL = "/openapi.json"
 HEALTH_STATUS_HEALTHY = "healthy"
 HEALTH_STATUS_DEGRADED = "degraded"
 
-# LangGraph routing labels (app/agents/router.py picks one of these per turn).
-ROUTE_GREETING = "greeting"
-ROUTE_OUT_OF_SCOPE = "out_of_scope"
-ROUTE_GENERAL = "general"
-ROUTE_AGENT = "agent"
-
-# Expanded route labels used by richer router/execution logic in the source app.
-ROUTE_PORTFOLIO_ONLY = "portfolio_only"
-ROUTE_CRM_ONLY = "crm_only"
-ROUTE_BOTH = "both"
-
-VALID_ROUTES = frozenset(
-    {
-        ROUTE_GREETING,
-        ROUTE_OUT_OF_SCOPE,
-        ROUTE_GENERAL,
-        ROUTE_AGENT,
-        ROUTE_PORTFOLIO_ONLY,
-        ROUTE_CRM_ONLY,
-        ROUTE_BOTH,
-    }
-)
-
-DATA_ROUTES = frozenset({ROUTE_PORTFOLIO_ONLY, ROUTE_CRM_ONLY, ROUTE_BOTH})
-
-EXEC_MODE_PARALLEL = "parallel"
-EXEC_MODE_SEQUENTIAL = "sequential"
-VALID_EXEC_MODES = frozenset({EXEC_MODE_PARALLEL, EXEC_MODE_SEQUENTIAL})
-
+# ---------------------------------------------------------------------------
+# Agents
+# ---------------------------------------------------------------------------
 AGENT_PORTFOLIO = "portfolio"
 AGENT_CRM = "crm"
-VALID_AGENTS = frozenset({AGENT_PORTFOLIO, AGENT_CRM})
+AGENT_ADMIN = "admin"
+VALID_AGENTS = frozenset({AGENT_PORTFOLIO, AGENT_CRM, AGENT_ADMIN})
+AGENT_ORDER = (AGENT_PORTFOLIO, AGENT_CRM, AGENT_ADMIN)
 
-SEQUENTIAL_HANDOFF_MAX_LEN = 1500
-
-LLM_PROVIDER_UNIQUE = "unique_ai"
-
-DEFAULT_LLM_MAX_RETRIES = 3
-DEFAULT_LLM_RETRY_BASE_DELAY = 1.0
-DEFAULT_LLM_RETRY_BACKOFF_MULTIPLIER = 2.0
-DEFAULT_LLM_RETRY_MAX_DELAY = 30.0
-
-LLM_PROVIDER_OPENAI = "openai"
-LLM_PROVIDER_GEMINI = "gemini"
-
-OPENAI_MODEL_GPT4O = "gpt-4o"
-OPENAI_MODEL_GPT4O_MINI = "gpt-4o-mini"
-OPENAI_MODEL_GPT4_TURBO = "gpt-4-turbo"
-OPENAI_MODEL_GPT35_TURBO = "gpt-3.5-turbo"
-
-GEMINI_MODEL_2_FLASH = "gemini-2.0-flash"
-GEMINI_MODEL_2_PRO = "gemini-2.0-pro-exp"
-GEMINI_MODEL_15_PRO = "gemini-1.5-pro"
-GEMINI_MODEL_15_FLASH = "gemini-1.5-flash"
-
-MODEL_TO_PROVIDER = {
-    GEMINI_MODEL_2_FLASH: LLM_PROVIDER_GEMINI,
-    GEMINI_MODEL_2_PRO: LLM_PROVIDER_GEMINI,
-    GEMINI_MODEL_15_PRO: LLM_PROVIDER_GEMINI,
-    GEMINI_MODEL_15_FLASH: LLM_PROVIDER_GEMINI,
-    OPENAI_MODEL_GPT4O: LLM_PROVIDER_OPENAI,
-    OPENAI_MODEL_GPT4O_MINI: LLM_PROVIDER_OPENAI,
-    OPENAI_MODEL_GPT4_TURBO: LLM_PROVIDER_OPENAI,
-    OPENAI_MODEL_GPT35_TURBO: LLM_PROVIDER_OPENAI,
+AGENT_DISPLAY_NAMES = {
+    AGENT_PORTFOLIO: "Portfolio Insights",
+    AGENT_CRM: "Client Relationship",
+    AGENT_ADMIN: "Administrative",
 }
 
-MAX_RETRIES = 2
+# Capability blurbs injected into orchestrator prompts so routing stays in sync with the registry.
+AGENT_CAPABILITIES = {
+    AGENT_PORTFOLIO: (
+        "Portfolio data from the AAA system: summary, holdings, allocation, performance, risk and returns "
+        "for a client's portfolio."
+    ),
+    AGENT_CRM: (
+        "Client relationship data: emails and meetings (Outlook) and call transcripts (Fano), plus client "
+        "concerns, sentiment, commitments and follow-ups."
+    ),
+    AGENT_ADMIN: (
+        "Administrative knowledge: firm policies, processes, procedures, compliance rules and how-to guidance "
+        "served by the knowledge base."
+    ),
+}
 
-HISTORY_BLOCK_MAX_CONTENT_LEN = 200
+# Per-agent outcome status
+AGENT_STATUS_OK = "ok"
+AGENT_STATUS_PARTIAL = "partial"
+AGENT_STATUS_NO_DATA = "no_data"
+AGENT_STATUS_ERROR = "error"
 
-SAFE_DECLINE_MESSAGE = (
-    "I'm the Relationship Manager assistant, so I can only help with client "
-    "portfolio insights and client relationship/meeting information. I can't help "
-    "with that request, but feel free to ask me about a client's portfolio, "
-    "performance, holdings, meetings, or follow-up actions."
-)
+# Why an agent loop ended (ReAct reasons live in app/components/react/models.py)
+AGENT_TERMINATED_SINGLE_CALL = "single_call"
+ADMIN_EXTERNAL_TOOL_NAME = "administrative_knowledge_agent"
+# Tool text can point at one of its sources with this token; the output reducer swaps it for the [sourceN] marker.
+SOURCE_REF_TOKEN = "[[ref:{source_id}]]"
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+INTENT_GREETING = "greeting"
+INTENT_OUT_OF_SCOPE = "out_of_scope"
+INTENT_DATA_REQUEST = "data_request"
+INTENT_NEEDS_CLARIFICATION = "needs_clarification"
+
+EXEC_MODE_NONE = "none"
+EXEC_MODE_SINGLE = "single"
+EXEC_MODE_PARALLEL = "parallel"
+EXEC_MODE_SEQUENTIAL = "sequential"
+
+# Orchestrator phases; each phase selects its own prompt bundle.
+PHASE_ROUTING = "routing"
+PHASE_CLARIFICATION_FOLLOWUP = "clarification_followup"
+PHASE_REPLAN = "replan"
+PHASE_HUMAN_IN_THE_LOOP = "human_in_the_loop"
+
+# Sufficiency verdicts
+VERDICT_SUFFICIENT = "sufficient"
+VERDICT_REPLAN = "replan"
+VERDICT_ASK_HUMAN = "ask_human"
+VERDICT_PARTIAL = "partial"
+
+# ---------------------------------------------------------------------------
+# Graph node names
+# ---------------------------------------------------------------------------
+NODE_ORCHESTRATOR = "orchestrator"
+NODE_DIRECT_REPLY = "direct_reply"
+NODE_SAFE_DECLINE = "safe_decline"
+NODE_ASK_HUMAN = "ask_human"
+NODE_STAGE_DISPATCH = "stage_dispatch"
+NODE_PORTFOLIO_AGENT = "portfolio_agent"
+NODE_CRM_AGENT = "crm_agent"
+NODE_ADMIN_AGENT = "admin_agent"
+NODE_STAGE_JOIN = "stage_join"
+NODE_REDUCE_OUTPUTS = "reduce_outputs"
+NODE_SUFFICIENCY = "sufficiency_check"
+NODE_FINAL_AGENT = "final_agent"
+
+AGENT_TO_NODE = {
+    AGENT_PORTFOLIO: NODE_PORTFOLIO_AGENT,
+    AGENT_CRM: NODE_CRM_AGENT,
+    AGENT_ADMIN: NODE_ADMIN_AGENT,
+}
+
+# Nodes shown as steps in the Unique chat UI; other nodes stay internal.
+STEP_LABELS = {
+    NODE_ORCHESTRATOR: "Understanding your request",
+    NODE_PORTFOLIO_AGENT: "Retrieving portfolio data",
+    NODE_CRM_AGENT: "Retrieving client relationship data",
+    NODE_ADMIN_AGENT: "Looking up policies and processes",
+    NODE_SUFFICIENCY: "Checking the evidence",
+    NODE_FINAL_AGENT: "Writing the answer",
+}
+
+# How a turn ended
+OUTCOME_ANSWER = "answer"
+OUTCOME_GREETING = "greeting"
+OUTCOME_DECLINED = "declined"
+OUTCOME_CLARIFICATION = "clarification"
+
+GRAPH_RECURSION_LIMIT = 60
+
+# ---------------------------------------------------------------------------
+# Limits (env-tunable counterparts live in app/config.py)
+# ---------------------------------------------------------------------------
+HANDOFF_MAX_CHARS = 2500
+
+LLM_PROVIDER_UNIQUE = "unique_ai"
+LLM_PROVIDER_OPENAI = "openai"
+VALID_LLM_PROVIDERS = frozenset({LLM_PROVIDER_UNIQUE, LLM_PROVIDER_OPENAI})
+
+HISTORY_BLOCK_MAX_CONTENT_LEN = 20000
+
+# How much of a payload (prompts, replies, tool results) log lines show; see LOG_PAYLOAD_MODE in app/config.py
+LOG_PAYLOAD_MODE_SHORT = "short"
+LOG_PAYLOAD_MODE_FULL = "full"
 
 SSE_RESPONSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -91,7 +137,3 @@ SSE_RESPONSE_HEADERS = {
 }
 
 CORRELATION_ID_HEADER = "X-Correlation-ID"
-
-CLARIFY_PROCEED = "proceed"
-CLARIFY_ASK = "clarify"
-VALID_CLARIFY_ACTIONS = frozenset({CLARIFY_PROCEED, CLARIFY_ASK})

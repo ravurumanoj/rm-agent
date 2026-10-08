@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.agents.orchestrator import run_turn
+from app.graph.runner import run_turn
 from app.db.session import get_db
 from app.constants import SSE_RESPONSE_HEADERS
 from app.schemas.agent import (
@@ -13,11 +13,10 @@ from app.schemas.agent import (
     UniqueModelTestResponse,
 )
 from app.services.audit import record_event
-from app.services.local_function_tools import build_default_agent_metadata
 from app.services.streaming import stream_chat_events
 from app.services.tracing import operation_span, record_exception
 from app.services.unique_runtime import list_unique_models, test_unique_model
-from app.utils.logger import logger
+from app.utils.logger import logger, preview
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
 
@@ -34,8 +33,8 @@ async def chat(request: ChatRequest, db: Session | None = Depends(get_db)) -> Ch
             "app.tool_output_count": len(request.tool_outputs or []),
         },
     ) as span:
-        logger.info("[API] chat_started session_id=%s", request.session_id)
-        effective_metadata = build_default_agent_metadata(request.metadata)
+        logger.info("[API] chat_started session_id=%s message=%s", request.session_id, preview(request.message))
+        effective_metadata = request.metadata
         record_event(db, session_id=request.session_id, event="chat_request")
         try:
             result = await run_turn(
@@ -52,7 +51,10 @@ async def chat(request: ChatRequest, db: Session | None = Depends(get_db)) -> Ch
                 span.set_attribute("http.status_code", 500)
             raise
         record_event(db, session_id=request.session_id, event="chat_response")
-        logger.info("[API] chat_completed session_id=%s", request.session_id)
+        logger.info(
+            "[API] chat_completed session_id=%s citations=%s evaluations=%s reply=%s",
+            request.session_id, len(result.citations), len(result.evaluations), preview(result.reply),
+        )
         if span is not None:
             span.set_attribute("http.status_code", 200)
             span.set_attribute("app.citation_count", len(result.citations))
@@ -81,8 +83,8 @@ async def stream_chat(request: ChatRequest, db: Session | None = Depends(get_db)
             "app.tool_output_count": len(request.tool_outputs or []),
         },
     ) as span:
-        logger.info("[API] stream_started session_id=%s", request.session_id)
-        effective_metadata = build_default_agent_metadata(request.metadata)
+        logger.info("[API] stream_started session_id=%s message=%s", request.session_id, preview(request.message))
+        effective_metadata = request.metadata
         record_event(db, session_id=request.session_id, event="chat_stream_request")
 
         async def event_generator():
@@ -116,8 +118,10 @@ async def get_unique_models() -> UniqueModelListResponse:
     try:
         models = list_unique_models()
     except RuntimeError as exc:
+        logger.warning("[API] unique_models_list_unavailable error=%s", exc)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("[API] unique_models_list_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list Unique models: {exc}",
@@ -130,7 +134,7 @@ async def get_unique_models() -> UniqueModelListResponse:
 @router.post("/unique/models/test", response_model=UniqueModelTestResponse)
 async def run_unique_model_test(request: UniqueModelTestRequest) -> UniqueModelTestResponse:
     """Invoke a specific Unique model with a test query."""
-    logger.info("[API] unique_model_test_started model=%s", request.model)
+    logger.info("[API] unique_model_test_started model=%s query=%s", request.model, preview(request.query))
     try:
         response_text = await test_unique_model(
             model=request.model,
@@ -139,14 +143,19 @@ async def run_unique_model_test(request: UniqueModelTestRequest) -> UniqueModelT
             user_id=request.user_id,
         )
     except RuntimeError as exc:
+        logger.warning("[API] unique_model_test_rejected model=%s error=%s", request.model, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("[API] unique_model_test_failed model=%s", request.model)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unique model test failed: {exc}",
         ) from exc
 
-    logger.info("[API] unique_model_test_completed model=%s response_length=%s", request.model, len(response_text))
+    logger.info(
+        "[API] unique_model_test_completed model=%s response_length=%s response=%s",
+        request.model, len(response_text), preview(response_text),
+    )
     return UniqueModelTestResponse(
         model=request.model,
         query=request.query,

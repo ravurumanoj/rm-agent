@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncGenerator
 
-from app.agents.orchestrator import run_turn
+from app.graph.runner import run_turn
 from app.services.tracing import operation_span, record_exception
-from app.utils.logger import logger
+from app.utils.logger import logger, preview
 
 
 def sse_data(event: dict[str, Any]) -> str:
@@ -36,6 +36,7 @@ async def stream_chat_events(
         },
     ) as span:
         yield sse_data({"type": "step", "node": "router", "state": "running"})
+        logger.info("[STREAM] started session_id=%s message=%s", session_id, preview(message))
         yield sse_data({"type": "step", "node": "router", "state": "done"})
         yield sse_data({"type": "step", "node": "execute_agents", "state": "running"})
 
@@ -62,7 +63,9 @@ async def stream_chat_events(
         for token in _chunk_text(full_response):
             token_count += 1
             yield sse_data({"type": "token", "content": token})
-
+        logger.info(
+            "[STREAM] completed session_id=%s token_events=%s reply=%s", session_id, token_count, preview(full_response)
+        )
         yield sse_data({"type": "step", "node": "synthesizer", "state": "done"})
         yield sse_data(
             {
