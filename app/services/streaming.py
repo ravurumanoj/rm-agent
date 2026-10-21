@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, AsyncGenerator
 
 from app.graph.runner import run_turn
-from app.services.tracing import operation_span, record_exception
+from app.observability import Attr, SpanKind, SpanName, record_error, set_attributes, start_span
 from app.utils.logger import logger, preview
 
 
@@ -27,16 +28,16 @@ async def stream_chat_events(
     tool_outputs: list[dict[str, Any]] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Yield SSE events compatible with wealth app local UI stream contract."""
-    with operation_span(
-        "http.agent.stream.events",
-        kind="CHAIN",
+    with start_span(
+        SpanName.step("stream_events"),
+        kind=SpanKind.CHAIN,
         attributes={
-            "session.id": session_id,
+            Attr.SESSION_ID: session_id,
             "app.tool_output_count": len(tool_outputs or []),
         },
     ) as span:
+        started = time.perf_counter()
         yield sse_data({"type": "step", "node": "router", "state": "running"})
-        logger.info("[STREAM] started session_id=%s message=%s", session_id, preview(message))
         yield sse_data({"type": "step", "node": "router", "state": "done"})
         yield sse_data({"type": "step", "node": "execute_agents", "state": "running"})
 
@@ -48,10 +49,12 @@ async def stream_chat_events(
                 tool_outputs=tool_outputs or [],
             )
         except Exception as exc:
-            logger.error("stream_chat_events failed: %s", exc, exc_info=True)
-            record_exception(span, exc)
-            if span is not None:
-                span.set_attribute("app.stream.success", False)
+            logger.error(
+                "[STREAM] failed session_id=%s duration_ms=%s message=%s error=%s",
+                session_id, int((time.perf_counter() - started) * 1000), preview(message), exc, exc_info=True,
+            )
+            record_error(span, exc)  # handled: reported to the client as an error event
+            set_attributes(span, {"app.stream.success": False})
             yield sse_data({"type": "error", "message": str(exc)})
             return
 
@@ -64,7 +67,9 @@ async def stream_chat_events(
             token_count += 1
             yield sse_data({"type": "token", "content": token})
         logger.info(
-            "[STREAM] completed session_id=%s token_events=%s reply=%s", session_id, token_count, preview(full_response)
+            "[STREAM] completed session_id=%s duration_ms=%s token_events=%s citations=%s reply=%s",
+            session_id, int((time.perf_counter() - started) * 1000), token_count, len(result.citations),
+            preview(full_response),
         )
         yield sse_data({"type": "step", "node": "synthesizer", "state": "done"})
         yield sse_data(
@@ -76,8 +81,12 @@ async def stream_chat_events(
                 "evaluations": result.evaluations,
             }
         )
-        if span is not None:
-            span.set_attribute("app.stream.success", True)
-            span.set_attribute("app.stream.token_event_count", token_count)
-            span.set_attribute("app.citation_count", len(result.citations))
-            span.set_attribute("app.evaluation_count", len(result.evaluations))
+        set_attributes(
+            span,
+            {
+                "app.stream.success": True,
+                "app.stream.token_event_count": token_count,
+                Attr.CITATION_COUNT: len(result.citations),
+                "app.evaluation_count": len(result.evaluations),
+            },
+        )

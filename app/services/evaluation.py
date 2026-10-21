@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Optional
 
 from app.schemas.evaluation import EvaluationContext, EvaluationResult, EvaluationSeverity
 from app.services.citations import ReferenceManager

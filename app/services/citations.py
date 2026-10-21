@@ -9,6 +9,13 @@ from app.utils.logger import logger
 
 SOURCE_MARKER_PATTERN = r"\[source(\d+)\]"
 DEFAULT_REFERENCE_SOURCE = "rm-agent"
+# Matches constants.SOURCE_REF_TOKEN, the placeholder tools put where they cite one of their sources.
+SOURCE_REF_TOKEN_PATTERN = re.compile(r"\[\[ref:[^\]]*\]\]")
+
+
+def strip_source_ref_tokens(text: str) -> str:
+    """Drop unresolved source tokens, for text shown without the citation context (handoff, overviews)."""
+    return re.sub(r"[ \t]{2,}", " ", SOURCE_REF_TOKEN_PATTERN.sub("", text or "")).strip()
 
 
 class ReferenceManager:

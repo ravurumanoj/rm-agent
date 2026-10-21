@@ -8,12 +8,17 @@ from app.schemas.agent_io import AgentResult, AgentTask
 
 
 def _status(records: list[ToolCallRecord], error: str | None) -> str:
+    """ok / partial / error describe call failures; no_data means the calls worked but found nothing."""
     if not records:
         return AGENT_STATUS_ERROR if error else AGENT_STATUS_NO_DATA
     succeeded = sum(record.succeeded for record in records)
     if succeeded == 0:
         return AGENT_STATUS_ERROR
-    return AGENT_STATUS_PARTIAL if error or succeeded < len(records) else AGENT_STATUS_OK
+    if error or succeeded < len(records):
+        return AGENT_STATUS_PARTIAL
+    if all(record.no_data for record in records):
+        return AGENT_STATUS_NO_DATA
+    return AGENT_STATUS_OK
 
 
 def build_agent_result(

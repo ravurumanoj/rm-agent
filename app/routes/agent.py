@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import time
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -14,7 +16,7 @@ from app.schemas.agent import (
 )
 from app.services.audit import record_event
 from app.services.streaming import stream_chat_events
-from app.services.tracing import operation_span, record_exception
+from app.observability import Attr, SpanKind, SpanName, set_attributes, start_span
 from app.services.unique_runtime import list_unique_models, test_unique_model
 from app.utils.logger import logger, preview
 
@@ -24,16 +26,16 @@ router = APIRouter(prefix="/agent", tags=["Agent"])
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: Session | None = Depends(get_db)) -> ChatResponse:
     """Single-turn entry point into the LangGraph agent."""
-    with operation_span(
-        "http.agent.chat",
-        kind="CHAIN",
+    with start_span(
+        SpanName.http("/agent/chat"),
+        kind=SpanKind.CHAIN,
         attributes={
-            "session.id": request.session_id,
+            Attr.SESSION_ID: request.session_id,
             "http.route": "/agent/chat",
             "app.tool_output_count": len(request.tool_outputs or []),
         },
     ) as span:
-        logger.info("[API] chat_started session_id=%s message=%s", request.session_id, preview(request.message))
+        started = time.perf_counter()
         effective_metadata = request.metadata
         record_event(db, session_id=request.session_id, event="chat_request")
         try:
@@ -43,22 +45,28 @@ async def chat(request: ChatRequest, db: Session | None = Depends(get_db)) -> Ch
                 metadata=effective_metadata,
                 tool_outputs=request.tool_outputs,
             )
-        except Exception as exc:
+        except Exception:
             record_event(db, session_id=request.session_id, event="chat_failure")
-            logger.exception("[API] chat_failed session_id=%s", request.session_id)
-            record_exception(span, exc)
-            if span is not None:
-                span.set_attribute("http.status_code", 500)
+            logger.exception(
+                "[API] chat_failed status=500 session_id=%s duration_ms=%s message=%s",
+                request.session_id, int((time.perf_counter() - started) * 1000), preview(request.message),
+            )
+            set_attributes(span, {"http.status_code": 500})
             raise
         record_event(db, session_id=request.session_id, event="chat_response")
         logger.info(
-            "[API] chat_completed session_id=%s citations=%s evaluations=%s reply=%s",
-            request.session_id, len(result.citations), len(result.evaluations), preview(result.reply),
+            "[API] chat_completed status=200 session_id=%s duration_ms=%s citations=%s evaluations=%s message=%s reply=%s",
+            request.session_id, int((time.perf_counter() - started) * 1000), len(result.citations),
+            len(result.evaluations), preview(request.message), preview(result.reply),
         )
-        if span is not None:
-            span.set_attribute("http.status_code", 200)
-            span.set_attribute("app.citation_count", len(result.citations))
-            span.set_attribute("app.evaluation_count", len(result.evaluations))
+        set_attributes(
+            span,
+            {
+                "http.status_code": 200,
+                Attr.CITATION_COUNT: len(result.citations),
+                "app.evaluation_count": len(result.evaluations),
+            },
+        )
         return ChatResponse(
             session_id=request.session_id,
             reply=result.reply,
@@ -74,16 +82,16 @@ async def chat(request: ChatRequest, db: Session | None = Depends(get_db)) -> Ch
 )
 async def stream_chat(request: ChatRequest, db: Session | None = Depends(get_db)) -> StreamingResponse:
     """SSE stream endpoint aligned with wealth app local testing pattern."""
-    with operation_span(
-        "http.agent.stream",
-        kind="CHAIN",
+    with start_span(
+        SpanName.http("/agent/stream"),
+        kind=SpanKind.CHAIN,
         attributes={
-            "session.id": request.session_id,
+            Attr.SESSION_ID: request.session_id,
             "http.route": "/agent/stream",
             "app.tool_output_count": len(request.tool_outputs or []),
         },
     ) as span:
-        logger.info("[API] stream_started session_id=%s message=%s", request.session_id, preview(request.message))
+        logger.debug("[API] stream_accepted session_id=%s message=%s", request.session_id, preview(request.message))
         effective_metadata = request.metadata
         record_event(db, session_id=request.session_id, event="chat_stream_request")
 
@@ -96,14 +104,11 @@ async def stream_chat(request: ChatRequest, db: Session | None = Depends(get_db)
                     tool_outputs=request.tool_outputs,
                 ):
                     yield payload
-            except Exception as exc:
-                record_exception(span, exc)
-                if span is not None:
-                    span.set_attribute("app.stream.success", False)
+            except Exception:
+                set_attributes(span, {"app.stream.success": False})
                 raise
 
-        if span is not None:
-            span.set_attribute("http.status_code", 200)
+        set_attributes(span, {"http.status_code": 200})
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
@@ -114,7 +119,6 @@ async def stream_chat(request: ChatRequest, db: Session | None = Depends(get_db)
 @router.get("/unique/models", response_model=UniqueModelListResponse)
 async def get_unique_models() -> UniqueModelListResponse:
     """List available LLM model names from Unique."""
-    logger.info("[API] unique_models_list_started")
     try:
         models = list_unique_models()
     except RuntimeError as exc:
@@ -134,7 +138,6 @@ async def get_unique_models() -> UniqueModelListResponse:
 @router.post("/unique/models/test", response_model=UniqueModelTestResponse)
 async def run_unique_model_test(request: UniqueModelTestRequest) -> UniqueModelTestResponse:
     """Invoke a specific Unique model with a test query."""
-    logger.info("[API] unique_model_test_started model=%s query=%s", request.model, preview(request.query))
     try:
         response_text = await test_unique_model(
             model=request.model,
@@ -152,10 +155,7 @@ async def run_unique_model_test(request: UniqueModelTestRequest) -> UniqueModelT
             detail=f"Unique model test failed: {exc}",
         ) from exc
 
-    logger.info(
-        "[API] unique_model_test_completed model=%s response_length=%s response=%s",
-        request.model, len(response_text), preview(response_text),
-    )
+    logger.info("[API] unique_model_test_completed model=%s response_length=%s", request.model, len(response_text))
     return UniqueModelTestResponse(
         model=request.model,
         query=request.query,

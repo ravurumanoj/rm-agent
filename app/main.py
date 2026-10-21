@@ -4,6 +4,7 @@ import logging
 import sys
 import asyncio
 import contextlib
+import time
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, status
@@ -37,13 +38,14 @@ async def _lifespan(app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             exc = task.exception()
             if exc is not None:
-                logger.exception("SSE listener task crashed", exc_info=exc)
+                logger.error("[STARTUP] sse_listener_crashed error=%s: %s", type(exc).__name__, exc, exc_info=exc)
 
     net = configure_network_environment()
     configure_observability()
     logger.info(
-        "Startup configuration loaded",
+        "[STARTUP] configuration_loaded",
         extra={
+            **net,
             "app_name": settings.APP_NAME,
             "version": settings.VERSION,
             "debug": settings.DEBUG,
@@ -63,57 +65,35 @@ async def _lifespan(app: FastAPI):
             "log_file": settings.LOG_FILE,
         },
     )
-    logger.info(
-        "Network settings applied",
-        extra={
-            "has_http_proxy": net["has_http_proxy"],
-            "has_https_proxy": net["has_https_proxy"],
-            "has_no_proxy": net["has_no_proxy"],
-            "has_custom_ca_bundle": net["has_custom_ca_bundle"],
-            "ssl_verify": net["ssl_verify"],
-        },
-    )
-
-    missing = settings.missing_runtime_settings()
-    if missing["provider"]:
+    missing = {group: keys for group, keys in settings.missing_runtime_settings().items() if keys}
+    if missing:
         logger.warning(
-            "Missing required LLM settings for LLM_PROVIDER=%s: %s",
-            settings.LLM_PROVIDER,
-            ", ".join(missing["provider"]),
-        )
-    if missing["mcp"]:
-        logger.warning("MCP is enabled but configuration is incomplete: %s", ", ".join(missing["mcp"]))
-    if missing["phoenix"]:
-        logger.warning(
-            "Phoenix observability is enabled but configuration is incomplete: %s",
-            ", ".join(missing["phoenix"]),
+            "[STARTUP] settings_incomplete llm_provider=%s missing=%s; affected features will fail or stay off",
+            settings.LLM_PROVIDER, missing,
         )
 
     try:
         init_db()
-        if settings.POSTGRES_ENABLED:
-            logger.info("PostgreSQL database initialised.")
-        else:
-            logger.info("PostgreSQL disabled; startup DB init skipped.")
+        logger.info("[STARTUP] database %s", "initialised" if settings.POSTGRES_ENABLED else "disabled (POSTGRES_ENABLED=false)")
     except Exception as exc:
         if settings.DB_STARTUP_REQUIRED:
-            logger.critical("PostgreSQL database init failed and DB_STARTUP_REQUIRED=true: %s", exc)
+            logger.critical("[STARTUP] database_init_failed required=true error=%s; refusing to start", exc)
             raise RuntimeError("Database startup dependency failed") from exc
-        logger.error("PostgreSQL database init failed; starting in degraded mode: %s", exc)
+        logger.error("[STARTUP] database_init_failed required=false error=%s; starting in degraded mode", exc)
 
     if settings.SSE_ENABLED:
         webhook_url = settings.SSE_WEBHOOK_URL.strip()
         if webhook_url:
-            logger.info("Starting SSE listener task -> %s", webhook_url)
+            logger.info("[STARTUP] sse_listener_starting webhook_url=%s", webhook_url)
             sse_task = asyncio.create_task(
                 start_sse_listener(webhook_url, settings.SSE_MAX_CONCURRENT),
                 name="sse-listener",
             )
             sse_task.add_done_callback(_log_sse_task_result)
         else:
-            logger.warning("SSE listener enabled but SSE_WEBHOOK_URL is empty")
+            logger.warning("[STARTUP] sse_listener_not_started reason=SSE_WEBHOOK_URL_empty")
     else:
-        logger.info("SSE listener disabled (SSE_ENABLED is not true)")
+        logger.info("[STARTUP] sse_listener_disabled")
 
     try:
         yield
@@ -122,9 +102,8 @@ async def _lifespan(app: FastAPI):
             sse_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sse_task
-            logger.info("SSE listener stopped")
-
         shutdown_observability()
+        logger.info("[SHUTDOWN] completed sse_listener_stopped=%s spans_flushed=true", sse_task is not None)
 
 
 def _validate_cors(origins: list[str]) -> list[str]:
@@ -162,13 +141,24 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def correlation_id_middleware(request: Request, call_next):
-        correlation_id = str(uuid4())
+        # Keep an upstream id so one query can be followed across systems; otherwise start a new one.
+        incoming = request.headers.get(CORRELATION_ID_HEADER, "").strip()
+        correlation_id = incoming if 0 < len(incoming) <= 128 else str(uuid4())
         request.state.correlation_id = correlation_id
 
         token = set_correlation_id(correlation_id)
+        started = time.perf_counter()
+        response = None
         try:
             response = await call_next(request)
         finally:
+            # One access line per request, correlated (uvicorn's own access log carries no correlation id).
+            status_code = response.status_code if response is not None else 500
+            (logger.debug if request.url.path == "/health" else logger.info if status_code < 500 else logger.error)(
+                "[HTTP] request method=%s path=%s status=%s duration_ms=%s client=%s",
+                request.method, request.url.path, status_code, int((time.perf_counter() - started) * 1000),
+                request.client.host if request.client else "-",
+            )
             reset_correlation_id(token)
 
         response.headers[CORRELATION_ID_HEADER] = correlation_id
@@ -202,8 +192,11 @@ def create_app() -> FastAPI:
     app.include_router(webhook_router)
 
     @app.exception_handler(Exception)
-    async def global_exception_handler(_: Request, exc: Exception) -> JSONResponse:
-        logger.error("Unhandled exception: %s", exc, exc_info=True)
+    async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.error(
+            "[API] unhandled_exception method=%s path=%s error=%s: %s",
+            request.method, request.url.path, type(exc).__name__, exc, exc_info=True,
+        )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "An internal error occurred. Please try again later."},

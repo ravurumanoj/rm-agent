@@ -87,6 +87,8 @@ class WebhookPayload(BaseModel):
     userMessage: WebhookUserMessage = Field(default_factory=WebhookUserMessage)
     assistantMessage: WebhookAssistantMessage = Field(default_factory=WebhookAssistantMessage)
     configuration: dict = Field(default_factory=dict)
+    # Model the user picked for this turn: a model name, or a model-info object with "name" (unique_toolkit ChatEventPayload).
+    modelChoice: Any = None
 
     @model_validator(mode="before")
     @classmethod

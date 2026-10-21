@@ -47,6 +47,7 @@ class GraphState(TypedDict, total=False):
     phase: str
     decision: OrchestratorDecision | None
     resolved_query: str
+    conversation_summary: str
     entities: ExtractedEntities
     plan: ExecutionPlan | None
     current_stage: int
@@ -54,6 +55,7 @@ class GraphState(TypedDict, total=False):
     # Execution
     agent_results: Annotated[dict[str, AgentResult], merge_agent_results]
     evidence: dict[str, str]
+    evidence_map_reductions: int  # agent evidence blocks consolidated by level-2 map-reduce
     citation_references: list[dict[str, Any]]
 
     # Sufficiency loop

@@ -41,11 +41,15 @@ async def safe_decline_node(state: GraphState) -> dict[str, Any]:
 async def ask_human_node(state: GraphState) -> dict[str, Any]:
     """Human-in-the-loop exit: the question is the reply; the next turn resumes from the pending record."""
     question = state["decision"].clarification_question
-    logger.info("[GRAPH] ask_human question=%s", preview(question))
     pending = PendingClarification(
         original_query=state.get("resolved_query") or state.get("user_message", ""),
         question=question,
         entities=state.get("entities") or ExtractedEntities(),
+    )
+    logger.info(
+        "[GRAPH] ask_human phase=%s known_portfolio_ids=%s expected_count=%s question=%s",
+        state.get("phase", ""), pending.entities.portfolio_ids, pending.entities.expected_portfolio_count,
+        preview(question),
     )
     return {
         "final_output": question,

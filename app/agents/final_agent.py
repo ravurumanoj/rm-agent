@@ -9,11 +9,18 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
 from app.agents.formatting import format_sufficiency_report
+from app.components.llm_call_context import llm_call
 from app.components.messages import extract_text
 from app.graph.state import GraphState
-from app.prompts.final_agent import FINAL_AGENT_SYSTEM_PROMPT, FINAL_AGENT_USER_TEMPLATE
+from app.constants import FALLBACK_FINAL_ANSWER
+from app.prompts.final_agent import (
+    FINAL_AGENT_SYSTEM_PROMPT,
+    FINAL_AGENT_USER_TEMPLATE,
+    FINAL_REGENERATE_INSTRUCTION,
+)
 from app.schemas.agent import CitationItem
 from app.schemas.final_response import FinalAnswer
+from app.services.citations import ReferenceManager
 from app.utils.logger import logger, preview
 
 _MARKER_RE = re.compile(r"\[source\d+\]", re.IGNORECASE)
@@ -37,23 +44,42 @@ class FinalAgent(BaseAgent):
         user_prompt = FINAL_AGENT_USER_TEMPLATE.format_map(
             {
                 "resolved_query": state.get("resolved_query", ""),
+                "rm_message": state.get("user_message", ""),
                 "evidence": "\n\n".join((state.get("evidence") or {}).values()) or "(no agent output)",
-                "source_markers": "\n".join(f"{ref['marker']} {ref['title'] or ref['content_id']}" for ref in references)
-                or "(none)",
+                "source_markers": ReferenceManager.from_citations(references).build_reference_context() or "(none)",
                 "sufficiency_report": format_sufficiency_report(state.get("sufficiency")),
             }
         )
-        logger.info(
-            "[FINAL] writing query=%s evidence_agents=%s references=%s",
-            preview(state.get("resolved_query", "")), list((state.get("evidence") or {}).keys()), len(references),
-        )
         logger.debug("[FINAL] user_prompt=%s", preview(user_prompt))
-        response = await self.llm.ainvoke(
-            [SystemMessage(content=FINAL_AGENT_SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
+        messages = [SystemMessage(content=FINAL_AGENT_SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
+        text, regenerated, failure = "", False, None
+        try:
+            # LLM-level retries with back-off already happen in the router; this handles unusable output.
+            with llm_call("answer"):
+                text = await self._generate(messages, references)
+            if not text:
+                regenerated = True  # empty or blocked: once more with a stricter instruction
+                with llm_call("regenerate"):
+                    text = await self._generate(
+                        [*messages, HumanMessage(content=FINAL_REGENERATE_INSTRUCTION)], references
+                    )
+        except Exception as exc:
+            failure = exc
+        cited = select_cited_references(text, references) if text else []
+        degraded = not text
+        log = logger.error if degraded else (logger.warning if regenerated else logger.info)
+        log(
+            "[FINAL] completed degraded=%s regenerated=%s verdict=%s evidence_agents=%s references=%s cited=%s "
+            "reply_length=%s reply=%s",
+            degraded, regenerated, getattr(state.get("sufficiency"), "verdict", "-"),
+            list((state.get("evidence") or {}).keys()), len(references), len(cited), len(text),
+            preview(text or FALLBACK_FINAL_ANSWER),
+            exc_info=failure,
         )
-        text = strip_unknown_markers(extract_text(response.content).strip(), references)
-        cited = select_cited_references(text, references)
-        logger.info(
-            "[FINAL] completed reply_length=%s citations=%s reply=%s", len(text), len(cited), preview(text)
-        )
+        if degraded:
+            return FinalAnswer(markdown=FALLBACK_FINAL_ANSWER, citations=[], degraded=True)
         return FinalAnswer(markdown=text, citations=[CitationItem(**ref) for ref in cited])
+
+    async def _generate(self, messages: list, references: list[dict[str, Any]]) -> str:
+        response = await self.llm.ainvoke(messages)
+        return strip_unknown_markers(extract_text(response.content).strip(), references)

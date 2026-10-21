@@ -1,136 +1,54 @@
-import json
+"""The app's loggers, configured through app.observability.logs (correlated JSON or text, two streams).
+
+Kept as the import point the codebase already uses: ``from app.utils.logger import logger, preview``.
+"""
+
 import logging
-import sys
-from contextvars import ContextVar, Token
+from contextvars import Token
 from pathlib import Path
 
 from app.components.text_preview import configure_preview, preview
 from app.config import settings
+from app.observability import bind_query_context, get_correlation_id, reset_query_context
+from app.observability import configure_logging as configure_observability_logging
 
 __all__ = ["logger", "preview", "configure_logging", "get_correlation_id", "set_correlation_id", "reset_correlation_id"]
 
+APP_LOGGER_NAME = "rm_agent"
 # app.components uses stdlib loggers (it must not import app.*); they share the app handlers.
 _COMPONENTS_LOGGER_NAME = "app.components"
-
-
-_correlation_id_ctx: ContextVar[str] = ContextVar("correlation_id", default="-")
-
-
-class CorrelationIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.correlation_id = get_correlation_id()
-        return True
-
-
-class ExtraFieldsFormatter(logging.Formatter):
-    """Append non-standard LogRecord fields as compact JSON when present."""
-
-    _reserved_fields = {
-        "args",
-        "asctime",
-        "created",
-        "correlation_id",
-        "exc_info",
-        "exc_text",
-        "filename",
-        "funcName",
-        "levelname",
-        "levelno",
-        "lineno",
-        "module",
-        "msecs",
-        "message",
-        "msg",
-        "name",
-        "pathname",
-        "process",
-        "processName",
-        "relativeCreated",
-        "stack_info",
-        "taskName",
-        "thread",
-        "threadName",
-    }
-
-    def format(self, record: logging.LogRecord) -> str:
-        message = super().format(record)
-        extras = {
-            key: value
-            for key, value in record.__dict__.items()
-            if key not in self._reserved_fields and not key.startswith("_")
-        }
-        if not extras:
-            return message
-        return f"{message} extras={json.dumps(extras, default=str, sort_keys=True)}"
+_OBSERVABILITY_LOGGER_NAME = "app.observability"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def set_correlation_id(correlation_id: str) -> Token:
-    """Set request correlation id in context and return reset token."""
-    cid = (correlation_id or "").strip() or "-"
-    return _correlation_id_ctx.set(cid)
+    """Bind the request's correlation id; returns the token for reset_correlation_id."""
+    return bind_query_context(correlation_id=correlation_id)
 
 
 def reset_correlation_id(token: Token) -> None:
-    """Reset request correlation id context to prior value."""
-    _correlation_id_ctx.reset(token)
+    reset_query_context(token)
 
 
-def get_correlation_id() -> str:
-    """Return currently bound correlation id for this execution context."""
-    return _correlation_id_ctx.get()
+def _log_path(path: str) -> str | None:
+    if not (settings.ENABLE_FILE_LOGGING and path.strip()):
+        return None
+    log_path = Path(path)
+    return str(log_path if log_path.is_absolute() else _PROJECT_ROOT / log_path)
 
-def _apply_payload_settings() -> None:
+
+def configure_logging(level: int | str | None = None) -> None:
+    """(Re)configure handlers: LOG_FORMAT json|text, LOG_FILE for operational logs, AUDIT_LOG_FILE for audit."""
     configure_preview(full=settings.LOG_PAYLOAD_FULL, edge_chars=settings.LOG_PAYLOAD_EDGE_CHARS)
-
-
-def setup_logger(name: str = "rm_agent", level: int = logging.INFO) -> logging.Logger:
-    """Setup app logger with common metadata in each line."""
-    _apply_payload_settings()
-    app_logger = logging.getLogger(name)
-    app_logger.setLevel(level)
-
-    if app_logger.handlers:
-        return app_logger
-
-    formatter = ExtraFieldsFormatter(
-        "%(asctime)s %(levelname)s correlation_id=%(correlation_id)s %(name)s %(filename)s:%(lineno)d %(funcName)s %(message)s"
+    configure_observability_logging(
+        service_name=settings.APP_NAME,
+        level=level if level is not None else settings.LOG_LEVEL,
+        log_format=settings.LOG_FORMAT,
+        log_file=_log_path(settings.LOG_FILE),
+        audit_log_file=_log_path(settings.AUDIT_LOG_FILE),
+        loggers=(APP_LOGGER_NAME, _COMPONENTS_LOGGER_NAME, _OBSERVABILITY_LOGGER_NAME),
     )
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    console_handler.setLevel(level)
-    console_handler.addFilter(CorrelationIdFilter())
-    app_logger.addHandler(console_handler)
 
-    if settings.ENABLE_FILE_LOGGING and settings.LOG_FILE.strip():
-        log_path = Path(settings.LOG_FILE)
-        if not log_path.is_absolute():
-            log_path = Path(__file__).resolve().parents[2] / log_path
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-
-        file_handler = logging.FileHandler(log_path, encoding="utf-8")
-        file_handler.setFormatter(formatter)
-        file_handler.setLevel(level)
-        file_handler.addFilter(CorrelationIdFilter())
-        app_logger.addHandler(file_handler)
-
-    app_logger.propagate = False
-
-    components_logger = logging.getLogger(_COMPONENTS_LOGGER_NAME)
-    components_logger.setLevel(level)
-    components_logger.handlers = list(app_logger.handlers)
-    components_logger.propagate = False
-
-    return app_logger
-
-
-logger = setup_logger()
-
-
-def configure_logging(level: int = logging.INFO) -> None:
-    """Configure app logger level at startup."""
-    _apply_payload_settings()
-    logger.setLevel(level)
-    logging.getLogger(_COMPONENTS_LOGGER_NAME).setLevel(level)
-    for handler in logger.handlers:
-        handler.setLevel(level)
+configure_logging()
+logger = logging.getLogger(APP_LOGGER_NAME)

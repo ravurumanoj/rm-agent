@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Callable, Optional, Sequence
 
+from app.components.resilience import retry_async
 from app.config import settings
 from app.constants import LLM_PROVIDER_OPENAI, VALID_LLM_PROVIDERS
 from app.services.network import configure_network_environment
@@ -50,17 +50,25 @@ def build_model_chain(primary: str, fallback_models: Sequence[str]) -> list[str]
 
 def create_service_for_model(model: str, bound_tools: Optional[list] = None, provider: Optional[str] = None):
     """Construct the chat model for the active provider."""
-    if active_provider(provider) == LLM_PROVIDER_OPENAI:
+    name = active_provider(provider)
+    if name == LLM_PROVIDER_OPENAI:
         from app.services.llm_openai import create_openai_llm
 
         try:
-            return create_openai_llm(model, bound_tools)
+            service = create_openai_llm(model, bound_tools)
         except RuntimeError as exc:
+            logger.warning("[LLM] provider_unavailable provider=%s model=%s error=%s", name, model, exc)
             raise ProviderUnavailableError(str(exc)) from exc
+    else:
+        from app.services.llm_unique import UniqueAILLM
 
-    from app.services.llm_unique import UniqueAILLM
-
-    return UniqueAILLM(model=model, bound_tools=bound_tools)
+        service = UniqueAILLM(model=model, bound_tools=bound_tools)
+    logger.debug(
+        "[LLM] client_created provider=%s model=%s bound_tools=%s base_url_set=%s tls_verify=%s",
+        name, model, len(bound_tools or []), bool(settings.LLMAAS_BASE_URL) if name == LLM_PROVIDER_OPENAI else "-",
+        settings.SSL_VERIFY,
+    )
+    return service
 
 
 async def invoke_with_retry(
@@ -72,24 +80,16 @@ async def invoke_with_retry(
     max_delay: float,
     provider_name: str,
 ) -> Any:
-    """Invoke coroutine with exponential backoff retries."""
-    last_exc: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await coro_fn()
-        except Exception as exc:
-            last_exc = exc
-            if attempt >= max_retries:
-                break
-            delay = min(base_delay * (backoff_multiplier ** attempt), max_delay)
-            logger.warning(
-                "%s attempt %s/%s failed (%s: %s). Retrying in %.1fs",
-                provider_name,
-                attempt + 1,
-                max_retries + 1,
-                type(exc).__name__,
-                exc,
-                delay,
-            )
-            await asyncio.sleep(delay)
-    raise last_exc or RuntimeError(f"{provider_name} failed")
+    """Invoke coroutine, retrying only retryable errors with exponential back-off and jitter.
+
+    Non-retryable errors (auth, entitlement, bad request) fail fast; the router then tries the next model.
+    """
+    return await retry_async(
+        coro_fn,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        max_delay=max_delay,
+        multiplier=backoff_multiplier,
+        jitter_ratio=settings.RETRY_JITTER_RATIO,
+        label=f"LLM {provider_name}",
+    )

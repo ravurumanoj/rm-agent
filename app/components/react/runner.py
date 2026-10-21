@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from app.components.llm_call_context import llm_call
 from app.components.messages import extract_text
 from app.components.react.models import (
     TERMINATED_FINAL_ANSWER,
@@ -40,13 +41,14 @@ class ReActRunner:
         messages: list[BaseMessage] = [SystemMessage(content=self._system_prompt), HumanMessage(content=user_prompt)]
         outcome = ReActOutcome(terminated_reason=TERMINATED_MAX_ITERATIONS)
         seen: set[str] = set()
-        log.debug("react start tools=%s max_iterations=%s prompt=%s", sorted(self._tool_map), self._config.max_iterations, preview(user_prompt))
+        log.debug("[REACT] start tools=%s max_iterations=%s", sorted(self._tool_map), self._config.max_iterations)
 
         for iteration in range(1, max(1, self._config.max_iterations) + 1):
             try:
-                ai = await self._llm.ainvoke(messages)
+                with llm_call(f"step_{iteration}"):  # llm.portfolio_agent.step_1, step_2, ...
+                    ai = await self._llm.ainvoke(messages)
             except Exception as exc:
-                log.warning("llm call failed iteration=%s error=%s", iteration, exc)
+                log.warning("[REACT] llm_failed iteration=%s error=%s: %s; stopping the loop", iteration, type(exc).__name__, exc)
                 outcome.error, outcome.terminated_reason = str(exc), TERMINATED_LLM_ERROR
                 return outcome
 
@@ -54,30 +56,39 @@ class ReActRunner:
             thought = extract_text(ai.content).strip()
             calls = list(getattr(ai, "tool_calls", None) or [])
             if not calls:
-                log.info("react final_answer iteration=%s answer=%s", iteration, preview(thought))
+                log.debug("[REACT] final_answer iteration=%s answer=%s", iteration, preview(thought))
                 outcome.final_text, outcome.terminated_reason = thought, TERMINATED_FINAL_ANSWER
                 return outcome
 
-            log.info(
-                "react iteration=%s tool_calls=%s thought=%s",
+            log.debug(
+                "[REACT] step iteration=%s tool_calls=%s thought=%s",
                 iteration, [str(c.get("name") or "") for c in calls], preview(thought),
             )
             outcome.steps.append(
                 ReActStep(iteration=iteration, thought=thought, tool_names=[str(c.get("name") or "") for c in calls])
             )
             messages.append(ai)
-            for item in await execute_tool_calls(
+            executed = await execute_tool_calls(
                 calls, self._tool_map, iteration=iteration, seen_signatures=seen, config=self._config
-            ):
+            )
+            if self._config.reduce_observations is not None:
+                # Large results are consolidated before they enter the conversation and fill the context window.
+                conversation_chars = sum(len(extract_text(message.content)) for message in messages)
+                executed = await self._config.reduce_observations(executed, conversation_chars)
+            for item in executed:
                 messages.append(ToolMessage(content=item.observation, tool_call_id=item.call_id))
                 if item.record is not None:
                     outcome.records.append(item.record)
 
         try:
-            final = await self._llm.ainvoke([*messages, HumanMessage(content=self._config.force_final_message)])
+            with llm_call("forced_summary"):
+                final = await self._llm.ainvoke([*messages, HumanMessage(content=self._config.force_final_message)])
             outcome.final_text = extract_text(final.content).strip()
-            log.info("react forced_final_answer after_max_iterations=%s answer=%s", outcome.iterations, preview(outcome.final_text))
+            log.warning(
+                "[REACT] step_limit_reached iterations=%s tool_calls=%s; forced a final summary answer=%s",
+                outcome.iterations, len(outcome.records), preview(outcome.final_text),
+            )
         except Exception as exc:
-            log.warning("react forced final answer failed error=%s", exc)
+            log.warning("[REACT] forced_summary_failed iterations=%s error=%s: %s", outcome.iterations, type(exc).__name__, exc)
             outcome.error, outcome.terminated_reason = str(exc), TERMINATED_LLM_ERROR
         return outcome

@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     UNIQUE_STEPS_ENABLED: bool = True
     UNIQUE_STREAM_REPLY: bool = False
     UNIQUE_STREAM_CHUNK_WORDS: int = 40
+    # Conversation history read from the Unique chat: recent turns verbatim, older ones summarised by the LLM.
+    UNIQUE_HISTORY_ENABLED: bool = True
+    HISTORY_RAW_TURNS: int = 3
+    HISTORY_SUMMARY_MAX_TURNS: int = 20
+    HISTORY_SUMMARY_TIMEOUT_SECONDS: float = 30.0
 
     SSE_ENABLED: bool = False
     SSE_WEBHOOK_URL: str = "http://127.0.0.1:8000/relationship-manager/webhook"
@@ -64,10 +69,33 @@ class Settings(BaseSettings):
     SSE_SUBSCRIPTIONS: str = "unique.chat.external-module.chosen"  # comma-separated
     SSE_ASSISTANT_ID: str = ""  # blank: accept events for any assistant
 
-    LLM_MAX_RETRIES: int = 3
+    # Call-level retries: only retryable errors (timeouts, connection drops, 5xx, 429), exponential back-off + jitter.
+    LLM_MAX_RETRIES: int = 2
     LLM_RETRY_BASE_DELAY: float = 1.0
     LLM_RETRY_BACKOFF_MULTIPLIER: float = 2.0
     LLM_RETRY_MAX_DELAY: float = 30.0
+    RETRY_JITTER_RATIO: float = 0.25
+    TOOL_MAX_RETRIES: int = 2
+    TOOL_RETRY_BASE_DELAY: float = 1.0
+    TOOL_RETRY_MAX_DELAY: float = 8.0
+    # Off by default: with AGENT_TOOL_TIMEOUT_SECONDS at 300 s, retrying a timeout could hold a turn for minutes.
+    TOOL_RETRY_ON_TIMEOUT: bool = False
+    ADMIN_AGENT_MAX_RETRIES: int = 1
+    # Map-reduce of large data (app/components/map_reduce): at the agent level for tool results, and over the
+    # merged evidence of all agents. Token figures are estimates (MAP_REDUCE_CHARS_PER_TOKEN).
+    MAP_REDUCE_ENABLED: bool = True
+    MAP_REDUCE_CONTEXT_WINDOW_TOKENS: int = 128_000
+    # Share of the window tool results may fill inside one agent run (the rest is prompt, reasoning, answer).
+    MAP_REDUCE_AGENT_CONTEXT_SHARE: float = 0.5
+    MAP_REDUCE_TRIGGER_TOKENS: int = 40_000  # one result, or one step's results together, above this is reduced
+    MAP_REDUCE_MIN_TOKENS: int = 4_000  # results below this are never reduced
+    MAP_REDUCE_CHUNK_TOKENS: int = 24_000  # per map call; smaller chunks extract more reliably
+    MAP_REDUCE_MAX_PARALLEL: int = 4
+    MAP_REDUCE_MAX_DEPTH: int = 3
+    MAP_REDUCE_CHARS_PER_TOKEN: float = 3.5
+    # Server-level circuit breaker: after this many failed calls in a row a dependency is skipped for the cooldown.
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 5
+    CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = 60.0
 
     SSL_CA_CERT_PATH: str = ""
     SSL_VERIFY: bool = True
@@ -111,6 +139,14 @@ class Settings(BaseSettings):
     PHOENIX_SPACE_ID: str = ""
     PHOENIX_API_KEY: str = ""
     PHOENIX_CAPTURE_MESSAGE_CONTENT: bool = True
+    # llm.provider on LLM spans. Arize matches cost configs on llm.model_name (+ this value when the config sets a
+    # provider), so it must equal the provider entered in the custom model config. Empty: the LLM_PROVIDER name.
+    PHOENIX_LLM_PROVIDER: str = ""
+    # LangChain auto-instrumentation duplicates the spans this app already writes for every node and LLM call.
+    PHOENIX_LANGCHAIN_AUTO_INSTRUMENT: bool = False
+    # When the provider returns no token usage, counts are estimated for cost tracking: about 4 characters per
+    # token by default, or tiktoken when enabled (its vocabulary must be cached or downloadable).
+    PHOENIX_TIKTOKEN_ESTIMATE: bool = False
 
     LTM_ENABLED: bool = False
     QDRANT_LOCATION: str = ":memory:"
@@ -125,13 +161,17 @@ class Settings(BaseSettings):
     AGENT_MAX_REPLAN_LOOPS: int = 2
     AGENT_TOOL_TIMEOUT_SECONDS: float = 300.0
     AGENT_MAX_PARALLEL_TOOL_CALLS: int = 8
-    AGENT_EVIDENCE_MAX_CHARS_PER_SOURCE: int = 4000
+    AGENT_EVIDENCE_MAX_CHARS_PER_SOURCE: int = 400000
     AGENT_STRUCTURED_OUTPUT_ATTEMPTS: int = 2
     ADMIN_AGENT_TIMEOUT_SECONDS: float = 600.0
     ADMIN_CLM_ASSISTANT_ID: str = "assistant_bpo9dt6zgqei@gv2ay1oozu3"
     ADMIN_CLM_CHAT_ID: str = ""
     ENABLE_FILE_LOGGING: bool = True
     LOG_FILE: str = "logs/app.log"
+    # json: one JSON object per line with correlation/trace ids, for ELK. text: readable lines for local work.
+    LOG_FORMAT: str = "json"
+    # Compliance audit stream (one record per query); separate file/index with stricter retention and access.
+    AUDIT_LOG_FILE: str = "logs/audit.log"
     # "short" logs only the first/last LOG_PAYLOAD_EDGE_CHARS chars of prompts, replies and tool results; "full" logs all.
     LOG_PAYLOAD_MODE: str = LOG_PAYLOAD_MODE_SHORT
     LOG_PAYLOAD_EDGE_CHARS: int = 200

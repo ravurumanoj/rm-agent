@@ -6,7 +6,7 @@ from typing import AsyncIterator
 import httpx
 
 from app.config import settings
-from app.utils.logger import logger
+from app.utils.logger import logger, preview
 
 
 def _parse_sse_event(event_data: str) -> dict | None:
@@ -28,7 +28,7 @@ def _parse_sse_event(event_data: str) -> dict | None:
         return json.loads(event["data"])
 
     except json.JSONDecodeError as e:
-        logger.error(f"JSON parsing error: {e}")
+        logger.warning("[SSE] event_dropped reason=invalid_json error=%s data=%s", e, preview(event["data"]))
         return None
 
 
@@ -87,8 +87,8 @@ async def get_sse_stream() -> AsyncIterator[dict]:
                     response.raise_for_status()
 
                     logger.info(
-                        "SSE connection established successfully. "
-                        f"Status={response.status_code}"
+                        "[SSE] connected status=%s url=%s subscriptions=%s",
+                        response.status_code, settings.SSE_URL, settings.SSE_SUBSCRIPTIONS,
                     )
 
                     buffer = ""
@@ -108,31 +108,22 @@ async def get_sse_stream() -> AsyncIterator[dict]:
                         )
 
                         if connection_age >= 540:
-                            logger.info(
-                                "Reconnecting SSE stream before timeout"
-                            )
+                            logger.info("[SSE] reconnecting age_s=%s (before the 10-minute server timeout)", int(connection_age))
                             break
 
             # Avoid a tight reconnect loop if the server closes immediately.
             await asyncio.sleep(1)
 
         except asyncio.CancelledError:
-            logger.info("SSE listener was cancelled")
+            logger.info("[SSE] stream_cancelled")
             raise
 
         except httpx.HTTPStatusError as e:
-            logger.warning(
-                "SSE server returned an unsuccessful response. "
-                f"Status={e.response.status_code}. "
-                "Retrying in 5 seconds..."
-            )
+            logger.warning("[SSE] connect_rejected status=%s url=%s; retrying in 5s", e.response.status_code, settings.SSE_URL)
             await asyncio.sleep(5)
 
         except Exception as e:
-            logger.warning(
-                f"SSE connection error: {e}. "
-                "Retrying in 5 seconds..."
-            )
+            logger.warning("[SSE] connection_error error=%s: %s; retrying in 5s", type(e).__name__, e)
             await asyncio.sleep(5)
 
 
@@ -145,19 +136,17 @@ async def process_event(
     """Validate and forward an event to the webhook."""
 
     async with semaphore:
+        event_name, event_id = event_data.get("event", "-"), event_data.get("id", "-")
+        started = time.monotonic()
         try:
-            logger.debug("New SSE event received")
-
             payload = event_data.get("payload")
 
             if not isinstance(payload, dict):
-                logger.warning(
-                    "Ignoring SSE event because payload is missing "
-                    "or invalid"
-                )
+                logger.warning("[SSE] event_ignored reason=invalid_payload event=%s event_id=%s", event_name, event_id)
                 return
 
             event_assistant_id = payload.get("assistantId")
+            chat_id = payload.get("chatId") or payload.get("chatid") or "-"
 
             # Filter by assistant only when SSE_ASSISTANT_ID is configured.
             if (
@@ -165,15 +154,10 @@ async def process_event(
                 and event_assistant_id != settings.SSE_ASSISTANT_ID
             ):
                 logger.info(
-                    "Ignoring SSE event for a different assistant. "
-                    f"Received assistantId={event_assistant_id}"
+                    "[SSE] event_ignored reason=other_assistant event=%s event_id=%s assistant_id=%s",
+                    event_name, event_id, event_assistant_id,
                 )
                 return
-
-            logger.info(
-                "Accepted SSE event. "
-                f"assistantId={event_assistant_id}"
-            )
 
             response = await client.post(
                 webhook_url,
@@ -184,10 +168,11 @@ async def process_event(
                 timeout=300.0,
             )
 
+            duration_ms = int((time.monotonic() - started) * 1000)
             if not response.is_success:
                 logger.error(
-                    f"Webhook error: {response.status_code} - "
-                    f"{response.text}"
+                    "[SSE] forward_failed status=%s event=%s event_id=%s chat_id=%s duration_ms=%s body=%s",
+                    response.status_code, event_name, event_id, chat_id, duration_ms, preview(response.text),
                 )
                 return
 
@@ -196,23 +181,21 @@ async def process_event(
             except json.JSONDecodeError:
                 response_content = response.text
 
+            handled = response_content.get("handled") if isinstance(response_content, dict) else "-"
             logger.info(
-                f"Webhook response: {response_content}"
+                "[SSE] forwarded event=%s event_id=%s chat_id=%s assistant_id=%s status=%s handled=%s duration_ms=%s",
+                event_name, event_id, chat_id, event_assistant_id, response.status_code, handled, duration_ms,
             )
 
         except asyncio.CancelledError:
-            logger.info("Event processing task was cancelled")
+            logger.info("[SSE] forward_cancelled event=%s event_id=%s", event_name, event_id)
             raise
 
         except httpx.HTTPError as e:
-            logger.error(
-                f"HTTP error while forwarding SSE event: {e}"
-            )
+            logger.error("[SSE] forward_http_error event=%s event_id=%s error=%s: %s", event_name, event_id, type(e).__name__, e)
 
-        except Exception as e:
-            logger.error(
-                f"Error processing SSE event: {e}"
-            )
+        except Exception:
+            logger.exception("[SSE] forward_failed_unexpectedly event=%s event_id=%s", event_name, event_id)
 
 
 async def start_sse_listener(
@@ -222,7 +205,8 @@ async def start_sse_listener(
     """Listen to SSE events and forward valid events to the webhook."""
 
     logger.info(
-        f"Starting SSE listener for: {settings.SSE_SUBSCRIPTIONS}"
+        "[SSE] listener_started subscriptions=%s webhook_url=%s max_concurrent=%s assistant_filter=%s",
+        settings.SSE_SUBSCRIPTIONS, webhook_url, max_concurrent_tasks, settings.SSE_ASSISTANT_ID or "-",
     )
 
     background_tasks: set[asyncio.Task] = set()
@@ -239,9 +223,9 @@ async def start_sse_listener(
         try:
             async for event_data in get_sse_stream():
                 if len(background_tasks) >= max_pending_tasks:
-                    logger.warning(
-                        "Maximum pending task limit reached. "
-                        "Skipping the SSE event."
+                    logger.error(
+                        "[SSE] event_dropped reason=backlog_full pending=%s limit=%s event=%s event_id=%s",
+                        len(background_tasks), max_pending_tasks, event_data.get("event", "-"), event_data.get("id", "-"),
                     )
                     continue
 
@@ -260,7 +244,7 @@ async def start_sse_listener(
                 )
 
         except asyncio.CancelledError:
-            logger.info("Stopping SSE listener")
+            logger.info("[SSE] listener_stopping pending_tasks=%s", len(background_tasks))
 
             for task in background_tasks:
                 task.cancel()

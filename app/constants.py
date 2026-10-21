@@ -11,32 +11,18 @@ HEALTH_STATUS_DEGRADED = "degraded"
 # Agents
 # ---------------------------------------------------------------------------
 AGENT_PORTFOLIO = "portfolio"
-AGENT_CRM = "crm"
+AGENT_CLIENT_INTERACTION = "client_interaction"
 AGENT_ADMIN = "admin"
-VALID_AGENTS = frozenset({AGENT_PORTFOLIO, AGENT_CRM, AGENT_ADMIN})
-AGENT_ORDER = (AGENT_PORTFOLIO, AGENT_CRM, AGENT_ADMIN)
+VALID_AGENTS = frozenset({AGENT_PORTFOLIO, AGENT_CLIENT_INTERACTION, AGENT_ADMIN})
+AGENT_ORDER = (AGENT_PORTFOLIO, AGENT_CLIENT_INTERACTION, AGENT_ADMIN)
 
 AGENT_DISPLAY_NAMES = {
     AGENT_PORTFOLIO: "Portfolio Insights",
-    AGENT_CRM: "Client Relationship",
+    AGENT_CLIENT_INTERACTION: "Client Interaction",
     AGENT_ADMIN: "Administrative",
 }
 
-# Capability blurbs injected into orchestrator prompts so routing stays in sync with the registry.
-AGENT_CAPABILITIES = {
-    AGENT_PORTFOLIO: (
-        "Portfolio data from the AAA system: summary, holdings, allocation, performance, risk and returns "
-        "for a client's portfolio."
-    ),
-    AGENT_CRM: (
-        "Client relationship data: emails and meetings (Outlook) and call transcripts (Fano), plus client "
-        "concerns, sentiment, commitments and follow-ups."
-    ),
-    AGENT_ADMIN: (
-        "Administrative knowledge: firm policies, processes, procedures, compliance rules and how-to guidance "
-        "served by the knowledge base."
-    ),
-}
+# What each agent is for (shown to the orchestrator) lives in app/prompts/agent_catalog.py.
 
 # Per-agent outcome status
 AGENT_STATUS_OK = "ok"
@@ -55,6 +41,7 @@ SOURCE_REF_TOKEN = "[[ref:{source_id}]]"
 # ---------------------------------------------------------------------------
 INTENT_GREETING = "greeting"
 INTENT_OUT_OF_SCOPE = "out_of_scope"
+INTENT_UNSAFE = "unsafe"
 INTENT_DATA_REQUEST = "data_request"
 INTENT_NEEDS_CLARIFICATION = "needs_clarification"
 
@@ -84,7 +71,7 @@ NODE_SAFE_DECLINE = "safe_decline"
 NODE_ASK_HUMAN = "ask_human"
 NODE_STAGE_DISPATCH = "stage_dispatch"
 NODE_PORTFOLIO_AGENT = "portfolio_agent"
-NODE_CRM_AGENT = "crm_agent"
+NODE_CLIENT_INTERACTION_AGENT = "client_interaction_agent"
 NODE_ADMIN_AGENT = "admin_agent"
 NODE_STAGE_JOIN = "stage_join"
 NODE_REDUCE_OUTPUTS = "reduce_outputs"
@@ -93,7 +80,7 @@ NODE_FINAL_AGENT = "final_agent"
 
 AGENT_TO_NODE = {
     AGENT_PORTFOLIO: NODE_PORTFOLIO_AGENT,
-    AGENT_CRM: NODE_CRM_AGENT,
+    AGENT_CLIENT_INTERACTION: NODE_CLIENT_INTERACTION_AGENT,
     AGENT_ADMIN: NODE_ADMIN_AGENT,
 }
 
@@ -101,7 +88,7 @@ AGENT_TO_NODE = {
 STEP_LABELS = {
     NODE_ORCHESTRATOR: "Understanding your request",
     NODE_PORTFOLIO_AGENT: "Retrieving portfolio data",
-    NODE_CRM_AGENT: "Retrieving client relationship data",
+    NODE_CLIENT_INTERACTION_AGENT: "Retrieving client interactions",
     NODE_ADMIN_AGENT: "Looking up policies and processes",
     NODE_SUFFICIENCY: "Checking the evidence",
     NODE_FINAL_AGENT: "Writing the answer",
@@ -112,13 +99,28 @@ OUTCOME_ANSWER = "answer"
 OUTCOME_GREETING = "greeting"
 OUTCOME_DECLINED = "declined"
 OUTCOME_CLARIFICATION = "clarification"
+OUTCOME_DEGRADED = "degraded"  # the final answer could not be generated; a safe disclaimer was sent
+
+# Fixed replies, used only when the LLM could not produce a valid one (graceful degradation, never invented facts).
+FALLBACK_CLARIFICATION_QUESTION = (
+    "I couldn't work out exactly what you need. Could you rephrase your request, naming the client and any "
+    "portfolio or account IDs?"
+)
+FALLBACK_FINAL_ANSWER = (
+    "I couldn't put together a reliable answer right now, so I'm not showing partial or unverified figures. "
+    "Please try again in a few minutes."
+)
+FALLBACK_TURN_FAILURE = (
+    "Sorry, I couldn't complete your request right now because a service I depend on is unavailable. "
+    "Please try again in a few minutes."
+)
 
 GRAPH_RECURSION_LIMIT = 60
 
 # ---------------------------------------------------------------------------
 # Limits (env-tunable counterparts live in app/config.py)
 # ---------------------------------------------------------------------------
-HANDOFF_MAX_CHARS = 2500
+HANDOFF_MAX_CHARS = 25000
 
 LLM_PROVIDER_UNIQUE = "unique_ai"
 LLM_PROVIDER_OPENAI = "openai"

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.constants import HISTORY_BLOCK_MAX_CONTENT_LEN
+from app.utils.logger import logger
 
 
 class InMemoryCheckpointer:
@@ -29,8 +30,12 @@ class InMemoryCheckpointer:
 
         while len(self._session_order) > self._max_sessions:
             evicted = self._session_order.popleft()
-            self._snapshots.pop(evicted, None)
+            snapshot = self._snapshots.pop(evicted, None) or {}
             self._history.pop(evicted, None)
+            logger.warning(
+                "[MEMORY] session_evicted session_id=%s max_sessions=%s pending_clarification_lost=%s",
+                evicted, self._max_sessions, bool(snapshot.get("pending_clarification")),
+            )
 
     def save_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> None:
         if not session_id.strip():

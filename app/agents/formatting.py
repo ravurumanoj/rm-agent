@@ -7,6 +7,7 @@ from typing import Any
 from app.schemas.agent_io import AgentResult
 from app.schemas.orchestrator import ExecutionPlan, ExtractedEntities
 from app.schemas.sufficiency import RefetchInstruction, SufficiencyVerdict
+from app.services.citations import strip_source_ref_tokens
 
 
 def format_entities(entities: ExtractedEntities) -> str:
@@ -15,6 +16,8 @@ def format_entities(entities: ExtractedEntities) -> str:
         lines.append(f"- client_id: {entities.client_id}")
     if entities.portfolio_ids:
         lines.append(f"- portfolio_ids: {', '.join(entities.portfolio_ids)}")
+    if entities.expected_portfolio_count:
+        lines.append(f"- expected_portfolio_count: {entities.expected_portfolio_count}")
     if entities.time_range:
         lines.append(f"- time_range: {entities.time_range}")
     if entities.topics:
@@ -23,17 +26,11 @@ def format_entities(entities: ExtractedEntities) -> str:
 
 
 def format_metadata_block(metadata: dict[str, Any]) -> str:
-    """Request context (client and active portfolios) as prompt text."""
-    lines = []
+    """Request context as prompt text. Active portfolios are left out on purpose: portfolio IDs come only from
+    what the RM types, via the orchestrator's extracted entities."""
     if metadata.get("client_id"):
-        lines.append(f"- client_id: {metadata['client_id']}")
-    portfolios = [
-        str(item.get("id") if isinstance(item, dict) else item)
-        for item in metadata.get("active_portfolios") or []
-    ]
-    if portfolios:
-        lines.append(f"- active portfolios: {', '.join(portfolios)}")
-    return "\n".join(lines) or "- none"
+        return f"- client_id: {metadata['client_id']}"
+    return "- none"
 
 
 def format_plan(plan: ExecutionPlan | None) -> str:
@@ -51,7 +48,7 @@ def format_results_overview(results: dict[str, AgentResult], *, max_chars: int =
         return "(nothing returned yet)"
     lines = []
     for agent, result in results.items():
-        summary = " ".join(result.summary.split())
+        summary = " ".join(strip_source_ref_tokens(result.summary).split())
         if len(summary) > max_chars:
             summary = summary[: max_chars - 3] + "..."
         lines.append(f"- {agent} [{result.status}, attempt {result.attempt}]: {summary or '(empty)'}")
@@ -76,12 +73,16 @@ def format_sufficiency_report(verdict: SufficiencyVerdict | None) -> str:
         issues = f" - {'; '.join(item.issues)}" if item.issues else ""
         lines.append(f"Assessment {item.agent}: {'adequate' if item.adequate else 'inadequate'}{issues}")
     if verdict.grounding_issues:
-        lines.append("Grounding issues: " + "; ".join(verdict.grounding_issues))
+        lines.append("Grounding issues (do not state these as facts): " + "; ".join(verdict.grounding_issues))
+    if verdict.conflicts:
+        lines.append("Conflicts (disclose both values with both markers; do not choose): " + "; ".join(verdict.conflicts))
+    if verdict.guardrail_issues:
+        lines.append("Guardrail issues (exclude or label as stated): " + "; ".join(verdict.guardrail_issues))
     if verdict.refetch_instructions:
         lines.append("Re-fetch instructions:\n" + format_refetch_instructions(verdict.refetch_instructions))
     if verdict.human_question is not None:
         human = verdict.human_question
         lines.append(f"Needed from RM: {human.question} (fields: {', '.join(human.missing_fields) or 'n/a'}; {human.reason})")
     if verdict.data_gaps:
-        lines.append("Data gaps: " + "; ".join(verdict.data_gaps))
+        lines.append("Data gaps (state each; show no section for it): " + "; ".join(verdict.data_gaps))
     return "\n".join(lines)

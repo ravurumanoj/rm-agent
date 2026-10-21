@@ -6,6 +6,8 @@ from app.constants import AGENT_DISPLAY_NAMES, AGENT_STATUS_ERROR, AGENT_STATUS_
 from app.graph.state import GraphState
 from app.schemas.agent_io import AgentResult, AgentTask
 from app.schemas.orchestrator import ExtractedEntities
+from app.services.citations import strip_source_ref_tokens
+from app.utils.logger import logger
 
 
 def build_handoff_context(results: dict[str, AgentResult], *, max_chars: int = HANDOFF_MAX_CHARS) -> str:
@@ -19,11 +21,15 @@ def build_handoff_context(results: dict[str, AgentResult], *, max_chars: int = H
         return ""
     budget = max(200, max_chars // len(usable))
     lines = []
+    trimmed = []
     for agent, result in usable:
-        summary = " ".join(result.summary.split())
+        summary = " ".join(strip_source_ref_tokens(result.summary).split())
         if len(summary) > budget:
+            trimmed.append(f"{agent}:{len(summary)}->{budget}")
             summary = summary[: budget - 3] + "..."
         lines.append(f"- {AGENT_DISPLAY_NAMES.get(agent, agent)}: {summary}")
+    if trimmed:
+        logger.warning("[GRAPH] handoff_trimmed budget_chars=%s trimmed=%s", budget, trimmed)
     return "\n".join(lines)
 
 
@@ -41,12 +47,19 @@ def build_stage_tasks(state: GraphState) -> list[AgentTask]:
     attempt = state.get("replan_count", 0) + 1
     entities = state.get("entities") or ExtractedEntities()
     query = state.get("resolved_query") or state.get("user_message", "")
+    logger.debug(
+        "[GRAPH] stage_tasks stage=%s agents=%s attempt=%s portfolio_ids=%s handoff_from=%s handoff_chars=%s",
+        stage_index + 1, sorted(running), attempt, entities.portfolio_ids,
+        sorted(agent for agent in (state.get("agent_results") or {}) if agent not in running), len(handoff),
+    )
 
     return [
         AgentTask(
             agent=step.agent,
             objective=step.objective,
             user_query=query,
+            rm_message=state.get("user_message", ""),
+            conversation_summary=state.get("conversation_summary", ""),
             entities=entities,
             handoff_context=handoff,
             extra_instruction=step.extra_instruction,

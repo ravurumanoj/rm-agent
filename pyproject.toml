@@ -10,6 +10,7 @@ requires-python = ">=3.14"
 dependencies = [
     "arize-otel>=0.13.0",
     "fastapi>=0.141.1",
+    "langchain-classic>=1.0.8",
     "langchain-core>=1.6.2",
     "langgraph>=1.2.11",
     "langgraph-checkpoint-postgres>=3.1.2",

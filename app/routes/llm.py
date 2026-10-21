@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.schemas.llm import LLMQueryRequest, LLMQueryResponse, SupportedModelsResponse
 from app.services.llm_catalog import LLMCallError, list_supported_models, query_llm_model
+from app.utils.logger import logger
 
 router = APIRouter(prefix="/agent/llm", tags=["LLM"])
 
@@ -22,6 +23,7 @@ async def query_llm(request: LLMQueryRequest) -> LLMQueryResponse:
     try:
         return LLMQueryResponse(**await query_llm_model(request.query, request.model))
     except ValueError as exc:
+        logger.warning("[API] llm_query_rejected status=400 model=%s error=%s", request.model, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except LLMCallError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

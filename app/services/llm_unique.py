@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator, Optional
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 
 from app.config import settings
-from app.services.tracing import llm_span, record_exception, record_llm_output
+from app.observability import normalize_token_usage, set_current_attributes
 from app.services.unique_sdk_client import configure_unique_sdk
 from app.utils.logger import logger
 
@@ -152,58 +152,29 @@ class UniqueAILLM:
         return normalized
 
     def _extract_usage(self, payload: Any) -> Optional[dict[str, int]]:
-        if isinstance(payload, dict):
-            candidates = [
-                payload.get("usage"),
-                payload.get("token_usage"),
-                payload.get("usage_metadata"),
-            ]
-            response_metadata = payload.get("response_metadata")
-            if isinstance(response_metadata, dict):
-                candidates.extend(
-                    [
-                        response_metadata.get("token_usage"),
-                        response_metadata.get("usage"),
-                        response_metadata.get("usage_metadata"),
-                    ]
-                )
-
-            for usage in candidates:
-                if not isinstance(usage, dict):
-                    continue
-                prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
-                completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
-                total_tokens = usage.get("total_tokens")
-                if total_tokens is None and isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
-                    total_tokens = prompt_tokens + completion_tokens
-                if any(value is not None for value in (prompt_tokens, completion_tokens, total_tokens)):
-                    return {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": total_tokens,
-                    }
-        if hasattr(payload, "to_dict") and callable(payload.to_dict):
+        """Token usage from a Unique response in whichever key spelling it uses (snake_case or camelCase)."""
+        if not isinstance(payload, dict) and callable(getattr(payload, "to_dict", None)):
             try:
-                return self._extract_usage(payload.to_dict())
+                payload = payload.to_dict()
             except Exception:
-                return None
-        usage = getattr(payload, "usage", None)
-        if isinstance(usage, dict):
-            prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
-            completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
-            total_tokens = usage.get("total_tokens")
-            if total_tokens is None and isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
-                total_tokens = prompt_tokens + completion_tokens
-            if any(value is not None for value in (prompt_tokens, completion_tokens, total_tokens)):
-                return {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                }
-
-        response_metadata = getattr(payload, "response_metadata", None)
+                pass
+        candidates: list[Any] = []
+        if isinstance(payload, dict):
+            candidates += [payload.get(key) for key in ("usage", "token_usage", "usage_metadata", "tokenUsage")]
+            response_metadata = payload.get("response_metadata")
+        else:
+            candidates.append(getattr(payload, "usage", None))
+            response_metadata = getattr(payload, "response_metadata", None)
         if isinstance(response_metadata, dict):
-            return self._extract_usage({"response_metadata": response_metadata})
+            candidates += [response_metadata.get(key) for key in ("token_usage", "usage", "usage_metadata")]
+        for candidate in candidates:
+            usage = normalize_token_usage(candidate)
+            if usage:  # LangChain's response_metadata convention: snake_case token_usage
+                return {
+                    "prompt_tokens": usage.get("prompt"),
+                    "completion_tokens": usage.get("completion"),
+                    "total_tokens": usage.get("total"),
+                }
         return None
 
     def _serialize_response_metadata(self, payload: Any) -> dict[str, Any]:
@@ -325,35 +296,16 @@ class UniqueAILLM:
         if options:
             payload["options"] = options
 
-        logger.debug(
-            "UniqueAI invoke payload prepared",
-            extra={
-                "model": self.model,
-                "message_count": len(payload["messages"]),
-                "tool_count": len(tool_defs),
-                "has_tool_choice": tool_choice is not None,
-                "has_options": bool(options),
-            },
-        )
-
         result = create(**payload)
         text = self._extract_text(result)
         tool_calls = self._extract_tool_calls(result)
         response_metadata = self._serialize_response_metadata(result)
-        if not response_metadata.get("token_usage"):
-            logger.debug(
-                "UniqueAI response missing token usage metadata",
-                extra={
-                    "model": self.model,
-                    "response_keys": response_metadata.get("unique_response_keys", []),
-                    "has_response_metadata": bool(response_metadata.get("unique_response_metadata")),
-                    "has_usage": bool(response_metadata.get("unique_usage")),
-                    "has_token_usage": bool(response_metadata.get("unique_token_usage")),
-                    "has_usage_metadata": bool(response_metadata.get("unique_usage_metadata")),
-                    "tool_call_count": len(tool_calls),
-                    "output_length": len(text),
-                },
-            )
+        logger.debug(
+            "[LLM] unique_sdk_call model=%s messages=%s tools=%s tool_choice=%s tool_calls=%s output_chars=%s "
+            "usage_returned=%s response_keys=%s",
+            self.model, len(payload["messages"]), len(tool_defs), tool_choice is not None, len(tool_calls), len(text),
+            bool(response_metadata.get("token_usage")), response_metadata.get("unique_response_keys", []),
+        )
         return AIMessage(
             content=text,
             additional_kwargs={"tool_calls": tool_calls} if tool_calls else {},
@@ -361,51 +313,27 @@ class UniqueAILLM:
         )
 
     async def ainvoke(self, messages: list[BaseMessage], **kwargs) -> AIMessage:
-        with llm_span(
-            "unique_ai.ainvoke",
-            model=self.model,
-            provider=self.PROVIDER_NAME,
-            messages=messages,
-            metadata={"bound_tool_count": len(self._bound_tools)},
-        ) as span:
-            try:
-                result = await asyncio.to_thread(self._invoke_sync_unique_sdk, messages, **kwargs)
-                record_llm_output(
-                    span,
-                    str(result.content or ""),
-                    (result.response_metadata or {}).get("token_usage") if hasattr(result, "response_metadata") else None,
-                )
-                if span is not None:
-                    span.set_attribute("llm.success", True)
-                    span.set_attribute("llm.tool_call_count", len(getattr(result, "tool_calls", []) or []))
-                    response_metadata = getattr(result, "response_metadata", {}) or {}
-                    response_keys = response_metadata.get("unique_response_keys")
-                    if response_keys:
-                        span.set_attribute("llm.unique.response_keys", ",".join(str(key) for key in response_keys))
-                    for key in ("unique_usage", "unique_token_usage", "unique_usage_metadata", "unique_response_metadata"):
-                        value = response_metadata.get(key)
-                        if value:
-                            span.set_attribute(f"llm.{key}", value)
-                return result
-            except RuntimeError as exc:
-                if "unique-sdk" not in str(exc):
-                    if span is not None:
-                        span.set_attribute("llm.success", False)
-                    record_exception(span, exc)
-                    raise
-                logger.warning("Unique SDK path unavailable; using OpenAI-compatible fallback: %s", exc)
-                if span is not None:
-                    span.set_attribute("llm.fallback_provider", "openai_compatible")
-                result = await self._build_openai_fallback_client().ainvoke(messages, **kwargs)
-                record_llm_output(span, str(result.content or ""))
-                if span is not None:
-                    span.set_attribute("llm.success", True)
-                return result
-            except Exception as exc:
-                if span is not None:
-                    span.set_attribute("llm.success", False)
-                record_exception(span, exc)
+        # No span of its own: the router already opened the LLM span for this call (one span per call, no
+        # duplicates in Arize). Provider details are added to that span; output and tokens are recorded by it.
+        try:
+            result = await asyncio.to_thread(self._invoke_sync_unique_sdk, messages, **kwargs)
+        except RuntimeError as exc:
+            if "unique-sdk" not in str(exc):
                 raise
+            logger.warning("[LLM] unique_sdk_unavailable model=%s error=%s; using the OpenAI-compatible fallback", self.model, exc)
+            set_current_attributes({"app.llm.unique.fallback_provider": "openai_compatible"})
+            return await self._build_openai_fallback_client().ainvoke(messages, **kwargs)
+
+        response_metadata = getattr(result, "response_metadata", {}) or {}
+        details: dict[str, Any] = {
+            "app.llm.unique.bound_tool_count": len(self._bound_tools),
+            "app.llm.unique.usage_returned": bool(response_metadata.get("token_usage")),
+            "app.llm.unique.response_keys": response_metadata.get("unique_response_keys"),
+        }
+        for key in ("unique_usage", "unique_token_usage", "unique_usage_metadata", "unique_response_metadata"):
+            details[f"app.llm.{key}"] = response_metadata.get(key) or None
+        set_current_attributes(details)
+        return result
 
     async def astream(self, messages: list[BaseMessage], **kwargs) -> AsyncIterator[AIMessageChunk]:
         # unique-sdk path is synchronous; convert full response to one chunk.

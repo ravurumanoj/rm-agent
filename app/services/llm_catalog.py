@@ -39,15 +39,20 @@ async def query_llm_model(query: str, model: str | None = None) -> dict[str, Any
         raise ValueError(f"Model '{target}' is not supported. Supported models: {', '.join(sorted(names))}")
 
     started = time.perf_counter()
-    logger.info("[LLM] query_started model=%s query=%s", target, preview(query))
     try:
         reply = await get_llm(model=target, fallback_models=[]).ainvoke([HumanMessage(content=query)])
     except Exception as exc:
-        logger.warning("[LLM] query_failed model=%s error=%s", target, exc)
+        logger.warning(
+            "[LLM] model_query_failed model=%s duration_ms=%s query=%s error=%s: %s",
+            target, int((time.perf_counter() - started) * 1000), preview(query), type(exc).__name__, exc,
+        )
         raise LLMCallError(f"{type(exc).__name__}: {exc}") from exc
     text = extract_text(reply.content)
     latency_ms = int((time.perf_counter() - started) * 1000)
-    logger.info("[LLM] query_completed model=%s latency_ms=%s response=%s", target, latency_ms, preview(text))
+    logger.info(
+        "[LLM] model_query_completed model=%s latency_ms=%s query=%s response=%s",
+        target, latency_ms, preview(query), preview(text),
+    )
     return {
         "response": text,
         "model": target,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.prompts.common import PLAN_BUILDING_RULES
+from app.prompts.common import PLAN_BUILDING_RULES, UNTRUSTED_RESULTS_RULE
 
 REPLAN_SYSTEM_PROMPT = (
     """\
@@ -12,9 +12,13 @@ so far as insufficient and returned structured re-fetch instructions. Build a co
 Available agents:
 {agent_catalog}
 
+"""
+    + UNTRUSTED_RESULTS_RULE
+    + """
+
 Rules:
-- Set intent to data_request. Keep resolved_query and entities unchanged unless the sufficiency report shows they \
-were wrong.
+- Set intent to data_request. Keep resolved_query and entities (especially every portfolio ID) unchanged unless \
+the sufficiency report shows they were wrong. Leave conversation_summary empty; the earlier one is kept.
 - Include only the agents named in the re-fetch instructions (any other agent is rejected). Agents that already \
 returned adequate data must not run again; their findings are passed along automatically.
 - For each step, write an objective that targets exactly the missing information, and copy the guidance from the \
@@ -30,20 +34,26 @@ wording than the previous attempt.
 )
 
 REPLAN_USER_TEMPLATE = """\
-Request context:
+<request_context>
 {metadata_block}
+</request_context>
 
-Standalone request:
+<standalone_request>
 {resolved_query}
+</standalone_request>
 
-Entities:
+<known_entities>
 {known_entities}
+</known_entities>
 
-Previous plan:
+<previous_plan>
 {previous_plan}
+</previous_plan>
 
-Sufficiency report (replan {replan_attempt} of {max_replans}):
+<sufficiency_report replan="{replan_attempt} of {max_replans}">
 {sufficiency_report}
+</sufficiency_report>
 
-What each agent returned so far:
-{results_overview}"""
+<agent_results>
+{results_overview}
+</agent_results>"""

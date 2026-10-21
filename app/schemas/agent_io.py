@@ -17,6 +17,10 @@ class AgentTask(BaseModel):
     agent: AgentId = Field(..., description="Agent that must execute the task.")
     objective: str = Field(..., description="What the agent must retrieve or answer.")
     user_query: str = Field(..., description="The RM's standalone question, for overall context.")
+    rm_message: str = Field(default="", description="The RM's latest message exactly as typed, for context.")
+    conversation_summary: str = Field(
+        default="", description="Orchestrator's summary of the earlier conversation relevant to this request."
+    )
     entities: ExtractedEntities = Field(default_factory=ExtractedEntities, description="Scoping entities.")
     handoff_context: str = Field(
         default="",

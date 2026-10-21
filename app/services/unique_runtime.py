@@ -72,7 +72,6 @@ def _resolve_llm_models_getter(llm_models_api: Any):
 
 def list_unique_models() -> list[dict[str, Any]]:
     """Return available Unique models in a stable response shape."""
-    logger.info("[UNIQUE] list_models_started")
     sdk = configure_unique_sdk(sdk_module=unique_sdk, settings_obj=settings)
 
     llm_models_api = getattr(sdk, "LLMModels", None)
@@ -85,13 +84,12 @@ def list_unique_models() -> list[dict[str, Any]]:
 
     payload = getter()
     models = _normalize_model_items(payload)
-    logger.info("[UNIQUE] list_models_completed count=%s", len(models))
+    logger.info("[UNIQUE] list_models_completed count=%s", len(models))  # failures raise to the route
     return models
 
 
 async def test_unique_model(model: str, query: str, *, company_id: str = "", user_id: str = "") -> str:
     """Invoke one Unique model with the provided query and return plain text."""
-    logger.info("[UNIQUE] test_model_started model=%s query=%s", model, preview(query))
     llm = get_llm(provider=LLM_PROVIDER_UNIQUE, model=model, fallback_models=[])
     response = await llm.ainvoke(
         [HumanMessage(content=query)],
@@ -100,6 +98,7 @@ async def test_unique_model(model: str, query: str, *, company_id: str = "", use
     )
     text = str(response.content or "")
     logger.info(
-        "[UNIQUE] test_model_completed model=%s response_length=%s response=%s", model, len(text), preview(text)
+        "[UNIQUE] test_model_completed model=%s query=%s response_length=%s response=%s",
+        model, preview(query), len(text), preview(text),
     )
     return text

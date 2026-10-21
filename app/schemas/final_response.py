@@ -15,3 +15,6 @@ class FinalAnswer(BaseModel):
         default_factory=list,
         description="Only the sources referenced by a [sourceN] marker in the markdown.",
     )
+    degraded: bool = Field(
+        default=False, description="True when generation failed and the safe disclaimer was returned instead."
+    )

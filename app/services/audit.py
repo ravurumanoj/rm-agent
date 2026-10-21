@@ -38,4 +38,7 @@ def record_event(db: Optional[Session], session_id: str, event: str) -> None:
         db.rollback()
         if isinstance(exc, SQLAlchemyError):
             _audit_skip_until = time.monotonic() + _AUDIT_DB_COOLDOWN_SECONDS
-        logger.warning("Audit event persistence failed: %s", exc)
+        logger.warning(
+            "[AUDIT] db_write_failed session_id=%s event=%s error=%s; paused %ss",
+            session_id, event, exc, _AUDIT_DB_COOLDOWN_SECONDS if isinstance(exc, SQLAlchemyError) else 0,
+        )

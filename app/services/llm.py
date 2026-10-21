@@ -32,12 +32,7 @@ def get_llm(
 
     provider = active_provider(provider)
     model_chain = build_model_chain(resolve_primary_model(provider, model), parse_fallback_models(fallback_models))
-    logger.info(
-        "LLM router initialized provider=%s primary=%s%s",
-        provider,
-        model_chain[0],
-        f", fallbacks={model_chain[1:]}" if len(model_chain) > 1 else ", no fallbacks",
-    )
+    logger.info("[LLM] router_ready provider=%s primary=%s fallbacks=%s", provider, model_chain[0], model_chain[1:])
 
     return LLMRouter(
         models=model_chain,

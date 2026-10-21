@@ -67,7 +67,7 @@ def get_db() -> Iterator[Session | None]:
 def init_db() -> None:
     """Create tables if missing. Called once on app startup."""
     if engine is None:
-        logger.info("PostgreSQL disabled via POSTGRES_ENABLED=false; skipping table init.")
+        logger.debug("[DB] init_skipped reason=POSTGRES_ENABLED=false")
         return
 
     from app.db import models  # noqa: F401  (ensure models are registered)

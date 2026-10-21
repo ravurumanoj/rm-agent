@@ -22,9 +22,18 @@ assert set(get_args(VerdictType)) == {VERDICT_SUFFICIENT, VERDICT_REPLAN, VERDIC
 class AgentAssessment(BaseModel):
     """Judgement of one agent's output."""
 
-    agent: AgentId = Field(..., description="Agent being assessed.")
-    adequate: bool = Field(..., description="True if the output is enough for its part of the question.")
-    issues: list[str] = Field(default_factory=list, description="Concrete problems: empty, off-topic, error, ungrounded.")
+    agent: AgentId = Field(..., description="Agent being assessed; only agents that ran.")
+    adequate: bool = Field(
+        ...,
+        description="True only if its part of the request is complete, relevant, grounded and has its required fields.",
+    )
+    issues: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Concrete problems, each naming what is affected: missing item or field, wrong scope, failed call, "
+            "ungrounded or uncited claim."
+        ),
+    )
 
 
 class RefetchInstruction(BaseModel):
@@ -42,35 +51,51 @@ class RefetchInstruction(BaseModel):
 class HumanQuestion(BaseModel):
     """What the RM must supply before the answer can be completed."""
 
-    question: str = Field(..., description="One concise question for the RM.")
+    question: str = Field(..., description="One concise question for the RM that names what is already known.")
     missing_fields: list[str] = Field(default_factory=list, description="Fields needed, e.g. 'portfolio_id'.")
     reason: str = Field(default="", description="Why the information is needed.")
 
 
 class SufficiencyVerdict(BaseModel):
-    """Outcome of the multi-purpose sufficiency check."""
+    """Outcome of the multi-purpose sufficiency check. Findings come first so the verdict follows from them."""
 
+    reasoning: str = Field(..., description="Brief: what the checks found and why the verdict follows.")
+    assessments: list[AgentAssessment] = Field(default_factory=list, description="One assessment per agent that ran.")
+    grounding_issues: list[str] = Field(
+        default_factory=list,
+        description="Claims not backed by tool evidence, or values that must be cited but have no source marker.",
+    )
+    conflicts: list[str] = Field(
+        default_factory=list,
+        description="Facts on which sources disagree, each with both values and both markers. Never resolved here.",
+    )
+    guardrail_issues: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Evidence the final answer must not use or must label, each with the reason: advice or recommendations, "
+            "compliance decisions, chat or in-person meetings, out-of-scope or non-entitled records, outside "
+            "information, unlabelled calculated content."
+        ),
+    )
     verdict: VerdictType = Field(
         ...,
         description=(
-            "sufficient: answer can be written. replan: re-run named agents. "
-            "ask_human: RM input is required. partial: answer with disclosed gaps, no further retrieval helps."
+            "ask_human: only the RM can supply what is missing. replan: another bounded retrieval round can fix the "
+            "gaps. partial: answer with the gaps disclosed; retrieving again cannot help. sufficient: every part "
+            "of the request is covered by grounded, cited evidence."
         ),
-    )
-    reasoning: str = Field(..., description="Why this verdict was chosen.")
-    assessments: list[AgentAssessment] = Field(default_factory=list, description="Per-agent assessment.")
-    grounding_issues: list[str] = Field(
-        default_factory=list,
-        description="Claims in agent summaries not supported by tool evidence, or conflicts between agents.",
     )
     refetch_instructions: list[RefetchInstruction] = Field(
         default_factory=list,
-        description="Required when verdict is replan.",
+        description="Required when verdict is replan: one entry per agent to re-run.",
     )
     human_question: HumanQuestion | None = Field(default=None, description="Required when verdict is ask_human.")
     data_gaps: list[str] = Field(
         default_factory=list,
-        description="Information the final answer must state as unavailable. Used when verdict is partial.",
+        description=(
+            "What the RM asked for that is unavailable and why, in plain words. The final answer states each gap "
+            "and shows no section for it. Required when verdict is partial."
+        ),
     )
 
     @model_validator(mode="after")
@@ -79,4 +104,6 @@ class SufficiencyVerdict(BaseModel):
             raise ValueError("refetch_instructions is required when verdict is replan")
         if self.verdict == VERDICT_ASK_HUMAN and self.human_question is None:
             raise ValueError("human_question is required when verdict is ask_human")
+        if self.verdict == VERDICT_PARTIAL and not self.data_gaps:
+            raise ValueError("data_gaps is required when verdict is partial")
         return self

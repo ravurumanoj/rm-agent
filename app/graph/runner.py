@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from app.config import settings
@@ -13,7 +14,8 @@ from app.schemas.internal import TurnResult
 from app.schemas.orchestrator import PendingClarification
 from app.services.checkpointer import in_memory_checkpointer
 from app.services.evaluation import create_default_evaluation_manager
-from app.services.tracing import operation_span, record_exception
+from app.observability import SpanKind, SpanName, query_context, start_span
+from app.services.observability import audit_query, record_query_outcome
 from app.utils.logger import logger, preview
 
 
@@ -30,8 +32,21 @@ def _load_session(session_id: str, history_block: str) -> tuple[str, PendingClar
 
 
 def _persist_session(session_id: str, message: str, final_state: GraphState) -> None:
+    """Save the turn, retrying once; if it still fails, the answer is delivered anyway and only resume is lost."""
     if not settings.GRAPH_CHECKPOINTER_ENABLED:
         return
+    for attempt in (1, 2):
+        try:
+            _write_session(session_id, message, final_state)
+            return
+        except Exception:
+            if attempt == 2:
+                logger.exception(
+                    "[GRAPH] checkpoint_write_failed session_id=%s; answering anyway, resume unavailable", session_id
+                )
+
+
+def _write_session(session_id: str, message: str, final_state: GraphState) -> None:
     new_pending = final_state.get("new_pending_clarification")
     plan = final_state.get("plan")
     in_memory_checkpointer.save_snapshot(
@@ -78,12 +93,23 @@ async def run_turn(
     metadata: dict[str, Any] | None = None,
     history_block: str = "",
 ) -> TurnResult:
-    """Run one RM message through the orchestrator graph and return reply, citations and evaluations."""
-    with operation_span(
-        "agent.turn", kind="CHAIN", attributes={"session.id": session_id, "app.turn.history_present": bool(history_block.strip())}
+    """Run one RM message through the orchestrator graph and return reply, citations and evaluations.
+
+    One query = one trace: the "query" span is the root every node, agent, tool and LLM span nests under, and
+    the correlation id bound here is on all of them and on every log line.
+    """
+    user_id = str((metadata or {}).get("user_id") or "")
+    with query_context(session_id=session_id, user_id=user_id), start_span(
+        SpanName.QUERY,
+        kind=SpanKind.CHAIN,
+        input_value=message,
+        attributes={"app.query.history_present": bool(history_block.strip())},
     ) as span:
-        logger.info("[GRAPH] turn_started session_id=%s message=%s", session_id, preview(message))
-        logger.debug("[GRAPH] turn_input metadata=%s history=%s", preview(metadata or {}), preview(history_block))
+        started = time.perf_counter()
+        logger.debug(
+            "[GRAPH] turn_input session_id=%s message=%s metadata=%s history=%s",
+            session_id, preview(message), preview(metadata or {}), preview(history_block),
+        )
         if tool_outputs:
             logger.warning("[GRAPH] tool_outputs_ignored count=%s; agents fetch their own data", len(tool_outputs))
 
@@ -111,19 +137,20 @@ async def run_turn(
                 evaluations=evaluations,
             )
             logger.info(
-                "[GRAPH] turn_completed session_id=%s outcome=%s citations=%s trace=%s reply=%s",
-                session_id,
-                final_state.get("outcome", ""),
-                len(result.citations),
-                final_state.get("node_trace", []),
-                preview(result.reply),
+                "[GRAPH] turn_completed session_id=%s duration_ms=%s outcome=%s replans=%s citations=%s "
+                "evaluations_failed=%s trace=%s reply=%s",
+                session_id, int((time.perf_counter() - started) * 1000), final_state.get("outcome", ""),
+                final_state.get("replan_count", 0), len(result.citations),
+                [item["name"] for item in evaluations if not item.get("passed", True)],
+                final_state.get("node_trace", []), preview(result.reply),
             )
-            logger.debug("[GRAPH] turn_evaluations=%s", preview(evaluations))
-            if span is not None:
-                span.set_attribute("app.turn.outcome", final_state.get("outcome", ""))
-                span.set_attribute("app.citation_count", len(result.citations))
+            signals = record_query_outcome(span, final_state)
+            audit_query(question=message, final_state=final_state, signals=signals)
             return result
-        except Exception as exc:
-            record_exception(span, exc)
-            logger.exception("[GRAPH] turn_failed session_id=%s", session_id)
+        except Exception:
+            # The exception propagating out of the span marks the query span as failed.
+            logger.exception(
+                "[GRAPH] turn_failed session_id=%s duration_ms=%s message=%s",
+                session_id, int((time.perf_counter() - started) * 1000), preview(message),
+            )
             raise

@@ -2,8 +2,6 @@ import argparse
 import os
 import uvicorn
 
-from app.utils.logger import logger
-
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run rm-agent FastAPI server.")
@@ -39,6 +37,9 @@ def run_server() -> None:
         os.environ["APP_ENV_FILE"] = args.env_file
     if args.debug:
         os.environ["DEBUG"] = "true"
+
+    # Imported only now: app.config reads APP_ENV_FILE and DEBUG once, on first import.
+    from app.utils.logger import logger
 
     app_instance = _build_app()
     settings = _load_settings()

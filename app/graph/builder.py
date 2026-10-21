@@ -1,7 +1,7 @@
 """Assembles the multi-agent workflow graph.
 
 START -> orchestrator -> {direct_reply | safe_decline | ask_human | stage_dispatch}
-stage_dispatch -> (fan-out) {portfolio_agent | crm_agent | admin_agent} -> stage_join
+stage_dispatch -> (fan-out) {portfolio_agent | client_interaction_agent | admin_agent} -> stage_join
 stage_join -> stage_dispatch (next stage) | reduce_outputs -> sufficiency_check
 sufficiency_check -> orchestrator (replan / ask human) | final_agent -> END
 """
@@ -16,7 +16,7 @@ from app.constants import (
     AGENT_TO_NODE,
     NODE_ADMIN_AGENT,
     NODE_ASK_HUMAN,
-    NODE_CRM_AGENT,
+    NODE_CLIENT_INTERACTION_AGENT,
     NODE_DIRECT_REPLY,
     NODE_FINAL_AGENT,
     NODE_ORCHESTRATOR,
@@ -53,7 +53,11 @@ def build_graph(deps: GraphDependencies | None = None):
     graph.add_node(NODE_ASK_HUMAN, ask_human_node)
     graph.add_node(NODE_STAGE_DISPATCH, stage_dispatch_node)
     graph.add_node(NODE_PORTFOLIO_AGENT, make_agent_node(deps.portfolio, NODE_PORTFOLIO_AGENT), input_schema=AgentNodeInput)
-    graph.add_node(NODE_CRM_AGENT, make_agent_node(deps.crm, NODE_CRM_AGENT), input_schema=AgentNodeInput)
+    graph.add_node(
+        NODE_CLIENT_INTERACTION_AGENT,
+        make_agent_node(deps.client_interaction, NODE_CLIENT_INTERACTION_AGENT),
+        input_schema=AgentNodeInput,
+    )
     graph.add_node(NODE_ADMIN_AGENT, make_agent_node(deps.admin, NODE_ADMIN_AGENT), input_schema=AgentNodeInput)
     graph.add_node(NODE_STAGE_JOIN, stage_join_node)
     graph.add_node(NODE_REDUCE_OUTPUTS, reduce_outputs_node)

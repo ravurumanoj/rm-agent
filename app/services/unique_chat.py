@@ -31,6 +31,7 @@ class UniqueChatContext:
     message_id: str
     user_id: str = ""
     company_id: str = ""
+    user_message_id: str = ""  # the RM message that triggered the turn; excluded from history
 
     @property
     def identity(self) -> dict[str, str]:
@@ -76,6 +77,10 @@ async def write_assistant_message(
         if references:
             params["references"] = references
         await sdk.Message.modify_async(**ctx.identity, id=ctx.message_id, **params)
+        logger.info(
+            "[UNIQUE] reply_written mode=modify chat_id=%s message_id=%s chars=%s references=%s",
+            ctx.chat_id, ctx.message_id, len(text), len(references),
+        )
         return
 
     # The user-message event has no placeholder message, so a new one is created; it needs the assistantId.
@@ -85,7 +90,12 @@ async def write_assistant_message(
               "completedAt": completed_at}
     if references:
         params["references"] = references
-    await sdk.Message.create_async(**ctx.identity, **params)
+    created = await sdk.Message.create_async(**ctx.identity, **params)
+    logger.info(
+        "[UNIQUE] reply_written mode=create chat_id=%s message_id=%s chars=%s references=%s",
+        ctx.chat_id, getattr(created, "id", None) or (created.get("id") if isinstance(created, dict) else "-"),
+        len(text), len(references),
+    )
 
 
 async def stream_reply(ctx: UniqueChatContext, text: str, citations: list[dict[str, Any]] | None = None) -> None:
