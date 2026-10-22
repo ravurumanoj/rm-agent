@@ -22,12 +22,19 @@ section, or the call failed or returned nothing.
 - Required fields are missing:
   - portfolio: as-of date, portfolio ID, reporting currency, valuation basis and source for each portfolio;
   - client_interaction: the date and the meeting, transcript or email behind each point;
-  - admin: steps, documents or approvals backed by a cited document section, and a clear statement of what the \
-documents do not cover.
+  - admin: an answer from the firm's documents that addresses the RM's question, with citations; when the RM \
+asked how to do something, the steps. Approvals, exceptions, required documents or responsible teams that the \
+documents do not mention are not a reason for inadequate or replan: list each as a data gap ("not specified in \
+the documents") so the final answer says so. An answer saying the documents do not cover the question is \
+adequate: it is the answer. Content the answer itself calls outdated, incomplete or ambiguous goes in \
+guardrail_issues with the reason "label as outdated / incomplete / ambiguous", so the final answer keeps it \
+with that label.
 - Grounding: a figure, date, name or quote in the agent findings is not in its tool evidence, or is inferred, \
-extrapolated or estimated. Also list these in grounding_issues.
-- Citations: a portfolio value, transaction detail, policy reference or meeting note has no [sourceN] marker \
-behind it. Also list these in grounding_issues.
+extrapolated or estimated. Also list these in grounding_issues. For single-call agents whose findings are the \
+tool evidence itself (marked "same as the tool evidence below"), there is nothing to cross-check.
+- Citations: a portfolio value, transaction detail or meeting note has no [sourceN] marker behind it. Also list \
+these in grounding_issues. Knowledge-assistant (admin) answers carry the citations their documents gave; a \
+sentence without a marker in such an answer is not a grounding issue.
 
 ## Step 2. Cross-check the evidence as a whole
 - conflicts: where sources disagree on the same fact, give both values with both markers. Never pick one.
@@ -39,6 +46,10 @@ behind it. Also list these in grounding_issues.
   - information that does not come from the agents' tools;
   - claims that an email was sent, a record updated, a task created or an order placed;
   - calculated or suggested content that is not labelled as calculated or as a suggestion.
+  Not guardrail issues: procedural guidance quoted from the firm's documents ("submit form X", "escalate to \
+Compliance", "it is recommended to collect two proofs of address"), KYC or AML procedure steps, and document \
+requirements. They describe the firm's process, not investment advice or a compliance decision, and the final \
+answer must keep them.
 
 ## Step 3. Choose the verdict: the first that applies
 1. ask_human: what is missing can only come from the RM, for example several clients, portfolios or meetings \
@@ -56,7 +67,10 @@ not entitled, already failed), whether or not other evidence is usable. List eac
 the data does not exist or could not be retrieved right now.
 4. sufficient: every part of the request is covered by grounded, cited evidence.
 Items in guardrail_issues or conflicts do not block sufficient or partial: the final answer excludes or discloses \
-them. Be strict on grounding, citations and guardrails, but do not demand detail the RM did not ask for.
+them. Be strict on grounding, citations and guardrails, but do not demand detail the RM did not ask for. Judge \
+coverage against what the RM actually asked (<rm_message>), not against an ideal complete answer. Replan an \
+admin answer only when it clearly answers a different question or the call failed with a fixable error; a \
+relevant but brief answer is sufficient.
 
 """
     + GROUNDING_RULES
@@ -69,6 +83,10 @@ SUFFICIENCY_USER_TEMPLATE = """\
 <request>
 {resolved_query}
 </request>
+
+<rm_message>
+{rm_message}
+</rm_message>
 
 <known_entities>
 {known_entities}

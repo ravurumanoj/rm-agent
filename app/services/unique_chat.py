@@ -139,15 +139,17 @@ class StepLogger:
         except Exception:
             logger.warning("[UNIQUE] step start failed key=%s", key, exc_info=True)
 
-    async def finish(self, key: str, *, failed: bool = False) -> None:
+    async def finish(self, key: str, *, failed: bool = False, text: str | None = None) -> None:
+        """Close the step; text, when given, replaces the step text with what the step did."""
         log_id = self._running.pop(key, None)
         if log_id is None:
             return
+        params: dict[str, Any] = {"status": STEP_FAILED if failed else STEP_COMPLETED}
+        if text:
+            params["text"] = text
         try:
             await configure_unique_sdk().MessageLog.update_async(
-                **self._ctx.identity,
-                message_log_id=log_id,
-                status=STEP_FAILED if failed else STEP_COMPLETED,
+                **self._ctx.identity, message_log_id=log_id, **params
             )
         except Exception:
             logger.warning("[UNIQUE] step finish failed key=%s", key, exc_info=True)

@@ -13,10 +13,25 @@ from app.services.unique_chat import current_step_logger
 from app.utils.logger import logger
 
 NodeFn = Callable[[Any], Awaitable[dict[str, Any]]]
+StepDescriber = Callable[[dict[str, Any]], str | None]
 
 
-def traced_node(name: str) -> Callable[[NodeFn], NodeFn]:
-    """Wrap a node in a tracing span, a start/failure log line and, when a chat is attached, a progress step."""
+def _step_text(describe: StepDescriber | None, update: dict[str, Any]) -> str | None:
+    """Completed-step text from the node's update; a describer bug must never fail the node."""
+    if describe is None:
+        return None
+    try:
+        return describe(update)
+    except Exception:
+        logger.warning("[GRAPH] step_describe_failed", exc_info=True)
+        return None
+
+
+def traced_node(name: str, describe: StepDescriber | None = None) -> Callable[[NodeFn], NodeFn]:
+    """Wrap a node in a tracing span, a start/failure log line and, when a chat is attached, a progress step.
+
+    describe(update) gives the text the step shows once the node has finished, e.g. where the request was routed.
+    """
 
     def decorator(fn: NodeFn) -> NodeFn:
         @functools.wraps(fn)
@@ -34,7 +49,7 @@ def traced_node(name: str) -> Callable[[NodeFn], NodeFn]:
                         name, int((time.perf_counter() - started) * 1000), sorted(update),
                     )
                     if steps:
-                        await steps.finish(name)
+                        await steps.finish(name, text=_step_text(describe, update))
                     return update
                 except Exception as exc:
                     logger.error(

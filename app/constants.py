@@ -84,14 +84,25 @@ AGENT_TO_NODE = {
     AGENT_ADMIN: NODE_ADMIN_AGENT,
 }
 
-# Nodes shown as steps in the Unique chat UI; other nodes stay internal.
+# Nodes shown as steps in the Unique chat UI; other nodes stay internal. Each step names who is working; when the
+# node finishes, the step text is replaced by what it did (see describe_* in app/graph/nodes).
+STEP_ORCHESTRATOR_NAME = "Orchestrator"
+STEP_SUFFICIENCY_NAME = "Sufficiency Check"
+STEP_FINAL_AGENT_NAME = "Final Answer Agent"
+
+
+def agent_step_name(agent: str) -> str:
+    """Name of an agent as shown in the chat steps, e.g. "Administrative Agent"."""
+    return f"{AGENT_DISPLAY_NAMES.get(agent, agent)} Agent"
+
+
 STEP_LABELS = {
-    NODE_ORCHESTRATOR: "Understanding your request",
-    NODE_PORTFOLIO_AGENT: "Retrieving portfolio data",
-    NODE_CLIENT_INTERACTION_AGENT: "Retrieving client interactions",
-    NODE_ADMIN_AGENT: "Looking up policies and processes",
-    NODE_SUFFICIENCY: "Checking the evidence",
-    NODE_FINAL_AGENT: "Writing the answer",
+    NODE_ORCHESTRATOR: f"{STEP_ORCHESTRATOR_NAME}: understanding your request",
+    NODE_PORTFOLIO_AGENT: f"{agent_step_name(AGENT_PORTFOLIO)}: retrieving portfolio data",
+    NODE_CLIENT_INTERACTION_AGENT: f"{agent_step_name(AGENT_CLIENT_INTERACTION)}: retrieving client interactions",
+    NODE_ADMIN_AGENT: f"{agent_step_name(AGENT_ADMIN)}: triggered to search internal policies and procedures",
+    NODE_SUFFICIENCY: f"{STEP_SUFFICIENCY_NAME}: verifying the evidence",
+    NODE_FINAL_AGENT: f"{STEP_FINAL_AGENT_NAME}: writing the response",
 }
 
 # How a turn ended

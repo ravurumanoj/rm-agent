@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agents.base import BaseAgent
 from app.agents.formatting import format_sufficiency_report
@@ -16,6 +16,7 @@ from app.constants import FALLBACK_FINAL_ANSWER
 from app.prompts.final_agent import (
     FINAL_AGENT_SYSTEM_PROMPT,
     FINAL_AGENT_USER_TEMPLATE,
+    FINAL_CITE_INSTRUCTION,
     FINAL_REGENERATE_INSTRUCTION,
 )
 from app.schemas.agent import CitationItem
@@ -65,6 +66,8 @@ class FinalAgent(BaseAgent):
                     )
         except Exception as exc:
             failure = exc
+        if text and references and not select_cited_references(text, references):
+            text = await self._add_citations(messages, text, references)
         cited = select_cited_references(text, references) if text else []
         degraded = not text
         log = logger.error if degraded else (logger.warning if regenerated else logger.info)
@@ -79,6 +82,22 @@ class FinalAgent(BaseAgent):
         if degraded:
             return FinalAnswer(markdown=FALLBACK_FINAL_ANSWER, citations=[], degraded=True)
         return FinalAnswer(markdown=text, citations=[CitationItem(**ref) for ref in cited])
+
+    async def _add_citations(self, messages: list, text: str, references: list[dict[str, Any]]) -> str:
+        """Sources exist but the answer cites none, so the UI would show no references: ask once to add them."""
+        try:
+            with llm_call("add_citations"):
+                cited_text = await self._generate(
+                    [*messages, AIMessage(content=text), HumanMessage(content=FINAL_CITE_INSTRUCTION)], references
+                )
+        except Exception:
+            logger.warning("[FINAL] add_citations_failed; keeping the uncited answer", exc_info=True)
+            return text
+        if cited_text and select_cited_references(cited_text, references):
+            logger.info("[FINAL] citations_added references=%s", len(select_cited_references(cited_text, references)))
+            return cited_text
+        logger.warning("[FINAL] answer_without_citations references=%s; keeping the first answer", len(references))
+        return text
 
     async def _generate(self, messages: list, references: list[dict[str, Any]]) -> str:
         response = await self.llm.ainvoke(messages)

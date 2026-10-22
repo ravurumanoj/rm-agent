@@ -12,7 +12,12 @@ from app.constants import (
     NODE_SUFFICIENCY,
     OUTCOME_ANSWER,
     OUTCOME_DEGRADED,
+    STEP_FINAL_AGENT_NAME,
+    STEP_SUFFICIENCY_NAME,
+    VERDICT_ASK_HUMAN,
+    VERDICT_PARTIAL,
     VERDICT_REPLAN,
+    VERDICT_SUFFICIENT,
 )
 from app.agents.base import get_shared_llm
 from app.agents.formatting import format_entities
@@ -57,8 +62,30 @@ def _objectives(state: GraphState) -> dict[str, str]:
     return {step.agent: step.objective for stage in (plan.stages if plan else []) for step in stage.steps}
 
 
+_VERDICT_STEP_TEXT = {
+    VERDICT_SUFFICIENT: "evidence is complete",
+    VERDICT_PARTIAL: "evidence checked, some information is unavailable",
+    VERDICT_REPLAN: "more information needed, fetching it",
+    VERDICT_ASK_HUMAN: "more details needed from you",
+}
+
+
+def describe_sufficiency(update: dict[str, Any]) -> str:
+    verdict = update["sufficiency"].verdict
+    return f"{STEP_SUFFICIENCY_NAME}: {_VERDICT_STEP_TEXT.get(verdict, 'evidence checked')}"
+
+
+def describe_final(update: dict[str, Any]) -> str:
+    if update.get("outcome") == OUTCOME_DEGRADED:
+        return f"{STEP_FINAL_AGENT_NAME}: a reliable answer could not be written"
+    cited = len(update.get("citations") or [])
+    return f"{STEP_FINAL_AGENT_NAME}: response ready" + (
+        f" with {cited} reference{'s' if cited != 1 else ''}" if cited else ""
+    )
+
+
 def make_sufficiency_node(agent: SufficiencyAgent) -> NodeFn:
-    @traced_node(NODE_SUFFICIENCY)
+    @traced_node(NODE_SUFFICIENCY, describe=describe_sufficiency)
     async def sufficiency_node(state: GraphState) -> dict[str, Any]:
         verdict = await agent.check(state)
         record_sufficiency_verdict(verdict, state.get("replan_count", 0))  # the agent logs the verdict
@@ -71,7 +98,7 @@ def make_sufficiency_node(agent: SufficiencyAgent) -> NodeFn:
 
 
 def make_final_node(agent: FinalAgent) -> NodeFn:
-    @traced_node(NODE_FINAL_AGENT)
+    @traced_node(NODE_FINAL_AGENT, describe=describe_final)
     async def final_node(state: GraphState) -> dict[str, Any]:
         answer = await agent.write(state)
         return {

@@ -396,7 +396,9 @@ Authentication and bad-request errors are not retried; the next model is tried s
 | Setting | Default | Purpose |
 |---|---|---|
 | `ADMIN_CLM_ASSISTANT_ID` | (set in code) | Unique assistant the admin agent asks |
-| `ADMIN_CLM_CHAT_ID` | | Reuse this CLM chat; empty = the client decides |
+| `ADMIN_CLM_CHAT_ID` | | CLM chat reused when `ADMIN_CLM_REUSE_CHAT` is true |
+| `ADMIN_CLM_REUSE_CHAT` | `false` | `false`: a new CLM chat per admin query, so earlier questions never shape the answer |
+| `ADMIN_CLM_STOP_CONDITION` | `completedAt` | CLM message field awaited; `completedAt` waits until its references are attached |
 | `ADMIN_AGENT_TIMEOUT_SECONDS` | `600.0` | Time limit for one CLM answer |
 | `ADMIN_AGENT_MAX_RETRIES` | `1` | Retries of a failed CLM call |
 

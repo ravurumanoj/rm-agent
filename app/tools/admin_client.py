@@ -6,6 +6,7 @@ agent result.
 
 from __future__ import annotations
 
+import inspect
 import re
 from typing import Any
 
@@ -39,15 +40,17 @@ class AdminSubagent:
         self.company_id = company_id
         self.query = query
         self.clm_assistant_id = clm_assistant_id or settings.ADMIN_CLM_ASSISTANT_ID
-        self.clm_chat_id = clm_chat_id or settings.ADMIN_CLM_CHAT_ID
+        # No chat id: the SDK opens a new CLM chat for this query, so no earlier question shapes the answer.
+        self.clm_chat_id = clm_chat_id or (settings.ADMIN_CLM_CHAT_ID if settings.ADMIN_CLM_REUSE_CHAT else None)
 
         required = {
             "user_id": self.user_id,
             "company_id": self.company_id,
             "clm_assistant_id": self.clm_assistant_id,
-            "clm_chat_id": self.clm_chat_id,
             "query": self.query,
         }
+        if settings.ADMIN_CLM_REUSE_CHAT:
+            required["clm_chat_id"] = self.clm_chat_id
         missing = [name for name, value in required.items() if not value]
         if missing:
             raise ValueError(f"Missing required admin agent value(s): {', '.join(missing)}")
@@ -58,6 +61,11 @@ class AdminSubagent:
         """Send the query to the CLM assistant and wait until its answer is complete."""
         from unique_sdk.utils.chat_in_space import send_message_and_wait_for_completion
 
+        optional: dict[str, Any] = {}
+        stop_condition = settings.ADMIN_CLM_STOP_CONDITION.strip()
+        # Older SDK releases have no stop_condition and always wait on stoppedStreamingAt.
+        if stop_condition and "stop_condition" in inspect.signature(send_message_and_wait_for_completion).parameters:
+            optional["stop_condition"] = stop_condition
         response = await send_message_and_wait_for_completion(
             user_id=self.user_id,
             company_id=self.company_id,
@@ -65,10 +73,13 @@ class AdminSubagent:
             chat_id=self.clm_chat_id,
             text=self.query,
             max_wait=settings.ADMIN_AGENT_TIMEOUT_SECONDS,
+            **optional,
         )
-        logger.debug(
-            "[ADMIN] clm_answered chat_id=%s chars=%s references=%s",
-            self.clm_chat_id, len(str(_get(response, "text") or "")), len(_get(response, "references") or []),
+        logger.info(
+            "[ADMIN] clm_answered chat_id=%s stop_condition=%s chars=%s references=%s inline_markers=%s",
+            _get(response, "chatId") or self.clm_chat_id or "-", optional.get("stop_condition", "stoppedStreamingAt"),
+            len(str(_get(response, "text") or "")), len(_get(response, "references") or []),
+            len(_SUP_MARKER.findall(str(_get(response, "text") or ""))),
         )
         return response
 
@@ -110,7 +121,12 @@ def _sources(text: str, references: list[Any]) -> list[SourceItem]:
 
 def _link_citations(text: str, references: list[Any]) -> str:
     """Replace the CLM answer's <sup>k</sup> markers with tokens the output reducer turns into [sourceN]."""
-    by_sequence = {_get(ref, "sequenceNumber"): _source_id(ref) for ref in references}
+    by_sequence: dict[int, str] = {}
+    for ref in references:
+        try:  # the API may return the number as an int or a string
+            by_sequence.setdefault(int(_get(ref, "sequenceNumber")), _source_id(ref))
+        except (TypeError, ValueError):
+            continue
 
     def replace(match: re.Match[str]) -> str:
         source_id = by_sequence.get(int(match.group(1)))

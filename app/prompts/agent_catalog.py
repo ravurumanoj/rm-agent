@@ -22,13 +22,17 @@ discussions.
   Needs: the client. For briefing notes, also plan "portfolio" when the RM gave portfolio IDs.
   Never: chat or in-person meetings; sending emails, updating CRM records or creating tasks.""",
     AGENT_ADMIN: """\
-Answers procedural questions from the firm's approved onboarding, recertification, policy, procedure and \
-guidance documents.
-  Covers: policy and procedure questions (steps, required documents, approvals, exceptions); document checklists \
-for account opening and onboarding by client or account type; recertification steps, documents and responsible \
-teams.
-  Needs: no client data.
-  Never: KYC, risk, AML or sanctions approvals or any other compliance decision.""",
+Answers any question that the firm's internal documents can answer, by searching its approved onboarding, \
+recertification, policy, procedure, guideline and how-to documents. Answers come with step-by-step instructions \
+and citations to the documents.
+  Covers: policies and procedures (steps, required documents, approvals, exceptions, timelines, responsible \
+teams); document checklists for account opening and onboarding by client or account type; recertification and \
+periodic review; KYC, AML and compliance procedures (what to do, not decisions); internal forms, systems and \
+tools, including how to use them and how to resolve an issue or error the RM runs into; who to contact or \
+escalate to. Questions may be indirect, vague or framed as a problem ("my client's onboarding is stuck, what \
+now?", "look into our internal docs for ...").
+  Needs: no client data. Never ask for a client or portfolio for this agent.
+  Never: KYC, risk, AML or sanctions approvals or any other compliance decision on a specific case.""",
 }
 
 assert set(AGENT_PURPOSES) == set(AGENT_ORDER), "AGENT_PURPOSES must describe every agent"

@@ -84,5 +84,9 @@ def format_sufficiency_report(verdict: SufficiencyVerdict | None) -> str:
         human = verdict.human_question
         lines.append(f"Needed from RM: {human.question} (fields: {', '.join(human.missing_fields) or 'n/a'}; {human.reason})")
     if verdict.data_gaps:
-        lines.append("Data gaps (state each; show no section for it): " + "; ".join(verdict.data_gaps))
+        lines.append(
+            "Data gaps (state each plainly and never fill it with guessed content; show no data section for it, "
+            "except a one-line 'not specified in the retrieved documents' entry where a procedure answer has that "
+            "section): " + "; ".join(verdict.data_gaps)
+        )
     return "\n".join(lines)

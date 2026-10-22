@@ -166,6 +166,12 @@ class Settings(BaseSettings):
     ADMIN_AGENT_TIMEOUT_SECONDS: float = 600.0
     ADMIN_CLM_ASSISTANT_ID: str = "assistant_bpo9dt6zgqei@gv2ay1oozu3"
     ADMIN_CLM_CHAT_ID: str = ""
+    # False: every admin query opens a new CLM chat, so earlier questions (of any RM) never leak into the CLM's
+    # context and parallel turns cannot read each other's answers. True: reuse ADMIN_CLM_CHAT_ID.
+    ADMIN_CLM_REUSE_CHAT: bool = False
+    # Field the CLM answer is awaited on. completedAt is set after the CLM's post-processing, when the inline
+    # <sup>k</sup> markers and the references are final; stoppedStreamingAt can return before references exist.
+    ADMIN_CLM_STOP_CONDITION: str = "completedAt"
     ENABLE_FILE_LOGGING: bool = True
     LOG_FILE: str = "logs/app.log"
     # json: one JSON object per line with correlation/trace ids, for ELK. text: readable lines for local work.

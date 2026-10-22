@@ -28,6 +28,7 @@ class SufficiencyAgent(BaseAgent):
         user_prompt = SUFFICIENCY_USER_TEMPLATE.format_map(
             {
                 "resolved_query": state.get("resolved_query", ""),
+                "rm_message": state.get("user_message", ""),
                 "known_entities": format_entities(state.get("entities") or ExtractedEntities()),
                 "plan_overview": format_plan(state.get("plan")),
                 "refetch_history": format_refetch_instructions(state.get("refetch_history") or []),

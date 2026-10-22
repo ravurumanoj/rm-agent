@@ -46,7 +46,8 @@ def _clean_query(text: str) -> str:
 
 
 class AdminAgent(BaseAgent):
-    """No reasoning loop: rewrites the request into one admin-only query, then makes one external call with it.
+    """No reasoning loop: lightly rewrites the request into one admin-only query (the RM's intent and wording are
+    kept), then makes one external call with it.
 
     Only the rewritten query reaches the external assistant; the RM message and history stay on our side.
     """
