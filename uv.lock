@@ -181,7 +181,7 @@ wheels = [
 
 [[package]]
 name = "arize-otel"
-version = "0.13.0"
+version = "0.14.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
@@ -189,10 +189,11 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-proto" },
     { name = "opentelemetry-sdk" },
+    { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9e/70/e318acceb6d7807a376ac126bde32bd9457ddf7a525fdcd629d9672f1bcb/arize_otel-0.13.0.tar.gz", hash = "sha256:6ccd1e26be23a52a0dad2798c924036e2c73a0db086a2214c2817fcfa36a31e6", size = 16799, upload-time = "2026-05-27T20:14:56.61Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/3e/160341d23dc7e1bed7a491ce67d68e70b18524e8d9a12e349a6a1f285696/arize_otel-0.14.1.tar.gz", hash = "sha256:1d609d35b21a2538307fe293a8193d876159d8f669cb76befee98f543db53875", size = 26206, upload-time = "2026-09-28T23:07:43.088Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/8e/2e067e00f27aba8999dd610dada7c119d728a545b32d5381fe7898b32bb4/arize_otel-0.13.0-py3-none-any.whl", hash = "sha256:1748b42d432c6b8013200e62804baa20b0e471a074b1cfe573a9bd0026f6515b", size = 17745, upload-time = "2026-05-27T20:14:55.321Z" },
+    { url = "https://files.pythonhosted.org/packages/64/e8/ef2603c30228a1061d32b8b7f1525e053a8834d501ce61ef990b19538086/arize_otel-0.14.1-py3-none-any.whl", hash = "sha256:055689c89364b80158a4088364422ce7a827d88ca465debf16e5de9c0720ed90", size = 29236, upload-time = "2026-09-28T23:07:41.51Z" },
 ]
 
 [[package]]
@@ -2985,7 +2986,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "arize-otel", specifier = ">=0.13.0" },
+    { name = "arize-otel", specifier = ">=0.14.1" },
     { name = "arize-phoenix", marker = "extra == 'phoenix'", specifier = ">=8.0.0" },
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "langchain-classic", specifier = ">=1.0.8" },
@@ -2995,10 +2996,10 @@ requires-dist = [
     { name = "langgraph-checkpoint-postgres", specifier = ">=3.1.2" },
     { name = "openinference-instrumentation-langchain", specifier = ">=0.1.30" },
     { name = "openinference-instrumentation-langchain", marker = "extra == 'phoenix'", specifier = ">=0.1.30" },
-    { name = "opentelemetry-exporter-otlp", specifier = ">=1.38.0" },
-    { name = "opentelemetry-exporter-otlp", marker = "extra == 'phoenix'", specifier = ">=1.38.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.38.0" },
-    { name = "opentelemetry-sdk", marker = "extra == 'phoenix'", specifier = ">=1.38.0" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.38.0,<1.45" },
+    { name = "opentelemetry-exporter-otlp", marker = "extra == 'phoenix'", specifier = ">=1.38.0,<1.45" },
+    { name = "opentelemetry-sdk", specifier = ">=1.38.0,<1.45" },
+    { name = "opentelemetry-sdk", marker = "extra == 'phoenix'", specifier = ">=1.38.0,<1.45" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.5" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },

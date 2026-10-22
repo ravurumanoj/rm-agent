@@ -8,15 +8,16 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "arize-otel>=0.13.0",
+    "arize-otel>=0.14.1",
     "fastapi>=0.141.1",
     "langchain-classic>=1.0.8",
     "langchain-core>=1.6.2",
     "langgraph>=1.2.11",
     "langgraph-checkpoint-postgres>=3.1.2",
     "openinference-instrumentation-langchain>=0.1.30",
-    "opentelemetry-exporter-otlp>=1.38.0",
-    "opentelemetry-sdk>=1.38.0",
+    # <1.45: arize-otel 0.14.1 reads OTLPSpanExporter._headers, removed in opentelemetry 1.45.0
+    "opentelemetry-exporter-otlp>=1.38.0,<1.45",
+    "opentelemetry-sdk>=1.38.0,<1.45",
     "psycopg[binary]>=3.3.5",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
@@ -51,8 +52,8 @@ openai = [
 phoenix = [
     "arize-phoenix>=8.0.0",
     "openinference-instrumentation-langchain>=0.1.30",
-    "opentelemetry-exporter-otlp>=1.38.0",
-    "opentelemetry-sdk>=1.38.0",
+    "opentelemetry-exporter-otlp>=1.38.0,<1.45",
+    "opentelemetry-sdk>=1.38.0,<1.45",
 ]
 
 

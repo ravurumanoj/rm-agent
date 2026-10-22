@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 
@@ -15,6 +17,20 @@ try:
     import unique_sdk  # type: ignore[reportMissingImports]
 except Exception:
     unique_sdk = None
+
+
+# Identity of the current turn (e.g. the webhook's userId/companyId); empty means use the configured settings.
+_turn_identity: ContextVar[tuple[str, str]] = ContextVar("unique_turn_identity", default=("", ""))
+
+
+@contextmanager
+def use_unique_identity(user_id: str, company_id: str) -> Iterator[None]:
+    """Make every Unique LLM call inside the block act as this user/company; settings stay the fallback."""
+    token = _turn_identity.set(((user_id or "").strip(), (company_id or "").strip()))
+    try:
+        yield
+    finally:
+        _turn_identity.reset(token)
 
 
 class UniqueAILLM:
@@ -36,20 +52,23 @@ class UniqueAILLM:
         self._openai_compatible_client = None
 
     def _resolve_identity(self, **kwargs) -> tuple[str, str]:
+        turn_user_id, turn_company_id = _turn_identity.get()
         company_id = str(
             kwargs.get("company_id")
+            or turn_company_id
             or settings.UNIQUE_COMPANY_ID
             or ""
         ).strip()
         user_id = str(
             kwargs.get("user_id")
+            or turn_user_id
             or settings.UNIQUE_USER_ID
             or ""
         ).strip()
         if not company_id or not user_id:
             raise RuntimeError(
                 "Unique AI requires company/user identity. Set UNIQUE_COMPANY_ID and "
-                "UNIQUE_USER_ID, or pass company_id/user_id per call."
+                "UNIQUE_USER_ID, send userId/companyId with the event, or pass company_id/user_id per call."
             )
         return company_id, user_id
 

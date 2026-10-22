@@ -22,6 +22,7 @@ from app.services.unique_chat import (
 from app.services.unique_webhook import is_duplicate_event, verify_webhook_signature
 from app.graph.runner import run_turn
 from app.services.llm_router import use_primary_model
+from app.services.llm_unique import use_unique_identity
 from app.utils.logger import logger, preview
 
 router = APIRouter(tags=["Agent"])
@@ -40,20 +41,22 @@ _EXTERNAL_MODULE_EVENTS = frozenset(
     }
 )
 
+# Filled values are needed to answer; empty ones are optional. userId/companyId fall back to UNIQUE_USER_ID/
+# UNIQUE_COMPANY_ID, and the reply goes into assistantMessage.id when given, else a new message for assistantId.
 _WEBHOOK_EXAMPLE: dict[str, Any] = {
-    "id": "evt_test_1",
-    "version": "1.0.0",
+    "id": "",
+    "version": "",
     "event": "unique.chat.external-module.chosen",
-    "createdAt": 1700000000,
+    "createdAt": "",
     "userId": "user_abc",
     "companyId": "company_xyz",
     "payload": {
         "chatId": "chat_test_123",
         "assistantId": "assistant_test_123",
-        "text": "How is my portfolio performing this quarter?",
-        "userMessage": {"id": "msg_user_1", "text": "How is my portfolio performing this quarter?"},
-        "assistantMessage": {"id": "msg_assistant_1"},
-        "configuration": {"customerId": "CUST001"},
+        "text": "",
+        "userMessage": {"id": "", "text": "How is my portfolio performing this quarter?"},
+        "assistantMessage": {"id": ""},
+        "configuration": {"portfolioId": ""},
     },
 }
 
@@ -217,7 +220,10 @@ async def _answer_event(
     t0 = time.perf_counter()
     # One trace per query: identity and the span first, so the parallel history load nests under them too.
     # The payload's model (if any) is the primary for every LLM call in this turn; configured models stay as fallbacks.
-    with use_primary_model(model), query_context(session_id=ctx.chat_id, user_id=ctx.user_id), start_span(
+    # The event's userId/companyId are the identity of every Unique LLM call in this turn; settings stay as fallbacks.
+    with use_primary_model(model), use_unique_identity(ctx.user_id, ctx.company_id), query_context(
+        session_id=ctx.chat_id, user_id=ctx.user_id
+    ), start_span(
         SpanName.step("answer_webhook_event"),
         kind=SpanKind.CHAIN,
         attributes={"app.webhook.event": event_name, "app.llm.requested_model": model or "-"},
