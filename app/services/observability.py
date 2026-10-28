@@ -16,6 +16,7 @@ from opentelemetry.trace import Span
 from app.components.react.models import ToolCallRecord
 from app.config import settings
 from app.constants import (
+    AGENT_STATUS_ERROR,
     INTENT_OUT_OF_SCOPE,
     INTENT_UNSAFE,
     OUTCOME_DEGRADED,
@@ -27,6 +28,7 @@ from app.observability import (
     Attr,
     ObservabilityConfig,
     get_audit_logger,
+    record_failure,
     record_output,
     record_tool_result,
     set_attributes,
@@ -93,12 +95,15 @@ def record_routing_decision(phase: str, decision: Any, span: Span | None = None)
     )
 
 
-def record_sufficiency_verdict(verdict: Any, replan_count: int, span: Span | None = None) -> None:
-    """The sufficiency check's verdict and issue counts (default: current span)."""
+def record_sufficiency_verdict(
+    verdict: Any, replan_count: int, span: Span | None = None, *, unverified: bool = False
+) -> None:
+    """The sufficiency check's verdict and issue counts (default: current span). unverified: the check could not
+    run and the evidence was passed on unchecked, recorded as "unverified" rather than as the stand-in verdict."""
     set_attributes(
         span or trace.get_current_span(),
         {
-            Attr.SUFFICIENCY_VERDICT: verdict.verdict,
+            Attr.SUFFICIENCY_VERDICT: "unverified" if unverified else verdict.verdict,
             Attr.REPLAN_COUNT: replan_count,
             "app.sufficiency.grounding_issue_count": len(verdict.grounding_issues),
             "app.sufficiency.guardrail_issue_count": len(verdict.guardrail_issues),
@@ -117,6 +122,35 @@ def record_tool_call(span: Span, record: ToolCallRecord) -> None:
         attempts=record.attempts,
         no_data=record.no_data,
     )
+
+
+def record_agent_result(span: Span, result: Any, *, exc: BaseException | None = None) -> None:
+    """An agent's outcome on its AGENT span: what it hands on to the graph as output (status, findings, sources)
+    plus counts. A failed result (status error or an agent-level error) marks the span failed with the reason."""
+    failed = [record for record in result.tool_calls if not record.succeeded]
+    set_attributes(
+        span,
+        {
+            Attr.STATUS: result.status,
+            "app.agent.terminated_reason": result.terminated_reason,
+            "app.agent.iterations": result.iterations,
+            "app.agent.tool_call_count": len(result.tool_calls),
+            "app.agent.tool_failure_count": len(failed),
+            "app.agent.source_count": len(result.sources),
+        },
+    )
+    output = {
+        "status": result.status,
+        "summary": result.summary,
+        "sources": [source.title or source.source_id for source in result.sources],
+        "failed_tools": [f"{record.tool_name}: {record.error}" for record in failed],
+        "error": result.error,
+    }
+    record_output(span, {key: value for key, value in output.items() if value})
+    if exc is None and result.status != AGENT_STATUS_ERROR and not result.error:
+        return
+    reason = exc or result.error or "; ".join(output["failed_tools"]) or "no result"
+    record_failure(span, reason, where=f"agent {result.agent} failed (status {result.status})", kind="agent_error")
 
 
 # --- query outcome, quality signals and audit -------------------------------------------------------------------
@@ -164,7 +198,9 @@ def query_signals(final_state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def record_query_outcome(span: Span, final_state: dict[str, Any]) -> dict[str, Any]:
+def record_query_outcome(final_state: dict[str, Any], span: Span | None = None) -> dict[str, Any]:
+    """Outcome signals and the reply as output on the query's root span (default: current span)."""
+    span = span or trace.get_current_span()
     signals = query_signals(final_state)
     set_attributes(span, signals)
     record_output(span, final_state.get("final_output", ""))

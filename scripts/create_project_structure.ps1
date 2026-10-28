@@ -113,7 +113,6 @@ $files = @(
     "app/services/entitlements.py",
     "app/services/evaluation.py",
     "app/services/guardrails.py",
-    "app/services/llm.py",
     "app/services/llm_core.py",
     "app/services/llm_openai.py",
     "app/services/llm_router.py",

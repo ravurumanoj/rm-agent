@@ -20,6 +20,7 @@ from app.components.react.models import (
     TERMINATED_FINAL_ANSWER,
     TERMINATED_LLM_ERROR,
     TERMINATED_MAX_ITERATIONS,
+    TERMINATED_REPEATED_CALLS,
     ReActConfig,
     ReActOutcome,
     ReActStep,
@@ -49,7 +50,8 @@ class ReActRunner:
                     ai = await self._llm.ainvoke(messages)
             except Exception as exc:
                 log.warning("[REACT] llm_failed iteration=%s error=%s: %s; stopping the loop", iteration, type(exc).__name__, exc)
-                outcome.error, outcome.terminated_reason = str(exc), TERMINATED_LLM_ERROR
+                # With the type, so an exception without a message (e.g. TimeoutError()) still reads as an error.
+                outcome.error, outcome.terminated_reason = f"{type(exc).__name__}: {exc}", TERMINATED_LLM_ERROR
                 return outcome
 
             outcome.iterations = iteration
@@ -79,16 +81,21 @@ class ReActRunner:
                 messages.append(ToolMessage(content=item.observation, tool_call_id=item.call_id))
                 if item.record is not None:
                     outcome.records.append(item.record)
+            # Every call repeated an earlier one, so another step cannot bring new data.
+            if all(item.record is None for item in executed):
+                log.warning("[REACT] repeated_calls_only iteration=%s; stopping and forcing the final summary", iteration)
+                outcome.terminated_reason = TERMINATED_REPEATED_CALLS
+                break
 
         try:
             with llm_call("forced_summary"):
                 final = await self._llm.ainvoke([*messages, HumanMessage(content=self._config.force_final_message)])
             outcome.final_text = extract_text(final.content).strip()
             log.warning(
-                "[REACT] step_limit_reached iterations=%s tool_calls=%s; forced a final summary answer=%s",
-                outcome.iterations, len(outcome.records), preview(outcome.final_text),
+                "[REACT] loop_stopped reason=%s iterations=%s tool_calls=%s; forced a final summary answer=%s",
+                outcome.terminated_reason, outcome.iterations, len(outcome.records), preview(outcome.final_text),
             )
         except Exception as exc:
             log.warning("[REACT] forced_summary_failed iterations=%s error=%s: %s", outcome.iterations, type(exc).__name__, exc)
-            outcome.error, outcome.terminated_reason = str(exc), TERMINATED_LLM_ERROR
+            outcome.error, outcome.terminated_reason = f"{type(exc).__name__}: {exc}", TERMINATED_LLM_ERROR
         return outcome

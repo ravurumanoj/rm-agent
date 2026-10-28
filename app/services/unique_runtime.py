@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage
-
 from app.config import settings
 from app.constants import LLM_PROVIDER_UNIQUE
-from app.services.llm import get_llm
 from app.services.unique_sdk_client import configure_unique_sdk
-from app.utils.logger import logger, preview
+from app.utils.logger import logger
 
 try:
     import unique_sdk  # type: ignore[reportMissingImports]
@@ -55,7 +52,7 @@ def _normalize_model_items(payload: Any) -> list[dict[str, Any]]:
         normalized.append(
             {
                 "model": model_name,
-                "provider": "unique_ai",
+                "provider": LLM_PROVIDER_UNIQUE,
                 "raw": raw,
             }
         )
@@ -86,19 +83,3 @@ def list_unique_models() -> list[dict[str, Any]]:
     models = _normalize_model_items(payload)
     logger.info("[UNIQUE] list_models_completed count=%s", len(models))  # failures raise to the route
     return models
-
-
-async def test_unique_model(model: str, query: str, *, company_id: str = "", user_id: str = "") -> str:
-    """Invoke one Unique model with the provided query and return plain text."""
-    llm = get_llm(provider=LLM_PROVIDER_UNIQUE, model=model, fallback_models=[])
-    response = await llm.ainvoke(
-        [HumanMessage(content=query)],
-        company_id=(company_id or "").strip() or None,
-        user_id=(user_id or "").strip() or None,
-    )
-    text = str(response.content or "")
-    logger.info(
-        "[UNIQUE] test_model_completed model=%s query=%s response_length=%s response=%s",
-        model, preview(query), len(text), preview(text),
-    )
-    return text

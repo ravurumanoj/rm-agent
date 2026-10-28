@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Sequence
 
-from app.components.resilience import retry_async
+from app.components.resilience import RetryStats, retry_async
 from app.config import settings
-from app.constants import LLM_PROVIDER_OPENAI, VALID_LLM_PROVIDERS
+from app.constants import LLM_PROVIDER_OPENAI, LLM_PROVIDER_ORDER, VALID_LLM_PROVIDERS
 from app.services.network import configure_network_environment
 from app.utils.logger import logger
 
@@ -29,6 +29,22 @@ def active_provider(provider: Optional[str] = None) -> str:
 def resolve_primary_model(provider: Optional[str] = None, model: Optional[str] = None) -> str:
     """Return the requested model, else the provider's configured model."""
     return (model or settings.default_model_for(active_provider(provider))).strip()
+
+
+def provider_for_model(model: str, preferred: Optional[str] = None) -> str:
+    """Provider that serves `model`: the preferred one (default LLM_PROVIDER) if it lists the model, else the
+    next provider that lists it; a model no provider lists goes to the preferred one with a warning."""
+    preferred = active_provider(preferred)
+    target = model.strip().lower()
+    for candidate in (preferred, *(p for p in LLM_PROVIDER_ORDER if p != preferred)):
+        if target in (name.lower() for name in settings.models_for(candidate)):
+            if candidate != preferred:
+                logger.info("[LLM] model_provider_resolved model=%s provider=%s preferred=%s", model, candidate, preferred)
+            return candidate
+    logger.warning(
+        "[LLM] model_not_listed model=%s provider=%s; add it to UNIQUE_MODELS or LLMAAS_MODELS", model, preferred
+    )
+    return preferred
 
 
 def parse_fallback_models(fallback_models: Optional[str | Sequence[str]]) -> list[str]:
@@ -79,10 +95,13 @@ async def invoke_with_retry(
     backoff_multiplier: float,
     max_delay: float,
     provider_name: str,
+    stats: RetryStats | None = None,
+    on_retry: Callable[[int, BaseException, float], None] | None = None,
 ) -> Any:
     """Invoke coroutine, retrying only retryable errors with exponential back-off and jitter.
 
     Non-retryable errors (auth, entitlement, bad request) fail fast; the router then tries the next model.
+    stats counts the attempts; on_retry(attempt, error, delay) runs before each retry wait.
     """
     return await retry_async(
         coro_fn,
@@ -92,4 +111,6 @@ async def invoke_with_retry(
         multiplier=backoff_multiplier,
         jitter_ratio=settings.RETRY_JITTER_RATIO,
         label=f"LLM {provider_name}",
+        stats=stats,
+        on_retry=on_retry,
     )

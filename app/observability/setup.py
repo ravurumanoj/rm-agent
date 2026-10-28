@@ -6,6 +6,9 @@
     shutdown_observability()         # at shutdown; flushes buffered spans
 
 Without setup (or when disabled) every span helper still works and simply records nothing.
+
+The provider is private, never the global OpenTelemetry one: only spans created through this package are exported,
+so HTTP/framework auto-instrumentation in the runtime (which uses the global provider) never reaches Arize AX.
 """
 
 from __future__ import annotations
@@ -52,6 +55,7 @@ class ObservabilityConfig:
 class _State:
     config: ObservabilityConfig = field(default_factory=lambda: ObservabilityConfig(enabled=False))
     provider: Any = None
+    tracer: Any = None
 
 
 _state = _State()
@@ -62,7 +66,10 @@ def get_config() -> ObservabilityConfig:
 
 
 def get_tracer() -> trace.Tracer:
-    """A no-op tracer until setup succeeds, so instrumented code never needs an "is tracing on" check."""
+    """The tracer of this package's own provider. Before setup it is the global tracer: a no-op unless something
+    (e.g. a test) installed a global provider, so instrumented code never needs an "is tracing on" check."""
+    if _state.tracer is not None:
+        return _state.tracer
     return trace.get_tracer(TRACER_NAME)
 
 
@@ -106,6 +113,7 @@ def setup_observability(config: ObservabilityConfig) -> bool:
 
     provider.add_span_processor(QueryContextSpanProcessor())
     _state.provider = provider
+    _state.tracer = provider.get_tracer(TRACER_NAME)
     if config.instrument_langchain:
         _instrument_langchain(provider)
     log.info(
@@ -127,6 +135,7 @@ def shutdown_observability(timeout_millis: int = 5000) -> None:
     except Exception:
         log.warning("[OBS] flush_failed; buffered spans may be lost", exc_info=True)
     _state.provider = None
+    _state.tracer = None
 
 
 def _arize_provider(config: ObservabilityConfig) -> Any:
@@ -139,7 +148,7 @@ def _arize_provider(config: ObservabilityConfig) -> Any:
         "space_id": config.space_id,
         "api_key": config.api_key,
         "project_name": config.project_name,
-        "set_global_tracer_provider": True,
+        "set_global_tracer_provider": False,  # private provider: see the module docstring
         "batch": True,
     }
     if config.endpoint:
@@ -172,7 +181,6 @@ def _otlp_provider(config: ObservabilityConfig) -> Any:
         endpoint=config.endpoint, headers=config.headers or None, certificate_file=config.certificate_file or None
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
     return provider
 
 

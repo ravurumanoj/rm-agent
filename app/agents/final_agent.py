@@ -13,6 +13,7 @@ from app.components.llm_call_context import llm_call
 from app.components.messages import extract_text
 from app.graph.state import GraphState
 from app.constants import FALLBACK_FINAL_ANSWER
+from app.observability import record_current_failure
 from app.prompts.final_agent import (
     FINAL_AGENT_SYSTEM_PROMPT,
     FINAL_AGENT_USER_TEMPLATE,
@@ -80,6 +81,11 @@ class FinalAgent(BaseAgent):
             exc_info=failure,
         )
         if degraded:
+            record_current_failure(
+                failure or "the model returned no usable text, also after the stricter regenerate",
+                where="final answer could not be written; sent the fallback answer",
+                kind="fallback",
+            )
             return FinalAnswer(markdown=FALLBACK_FINAL_ANSWER, citations=[], degraded=True)
         return FinalAnswer(markdown=text, citations=[CitationItem(**ref) for ref in cited])
 

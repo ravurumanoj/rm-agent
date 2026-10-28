@@ -88,7 +88,7 @@ AGENT_TO_NODE = {
 # node finishes, the step text is replaced by what it did (see describe_* in app/graph/nodes).
 STEP_ORCHESTRATOR_NAME = "Orchestrator"
 STEP_SUFFICIENCY_NAME = "Sufficiency Check"
-STEP_FINAL_AGENT_NAME = "Final Answer Agent"
+STEP_FINAL_AGENT_NAME = "Final Generation"
 
 
 def agent_step_name(agent: str) -> str:
@@ -114,7 +114,7 @@ OUTCOME_DEGRADED = "degraded"  # the final answer could not be generated; a safe
 
 # Fixed replies, used only when the LLM could not produce a valid one (graceful degradation, never invented facts).
 FALLBACK_CLARIFICATION_QUESTION = (
-    "I couldn't work out exactly what you need. Could you rephrase your request, naming the client and any "
+    "I couldn't work out exactly what you need. Could you rephrase your request"
     "portfolio or account IDs?"
 )
 FALLBACK_FINAL_ANSWER = (
@@ -135,7 +135,9 @@ HANDOFF_MAX_CHARS = 25000
 
 LLM_PROVIDER_UNIQUE = "unique_ai"
 LLM_PROVIDER_OPENAI = "openai"
-VALID_LLM_PROVIDERS = frozenset({LLM_PROVIDER_UNIQUE, LLM_PROVIDER_OPENAI})
+# Order in which the other providers are checked for a model after the configured LLM_PROVIDER
+LLM_PROVIDER_ORDER = (LLM_PROVIDER_UNIQUE, LLM_PROVIDER_OPENAI)
+VALID_LLM_PROVIDERS = frozenset(LLM_PROVIDER_ORDER)
 
 HISTORY_BLOCK_MAX_CONTENT_LEN = 20000
 

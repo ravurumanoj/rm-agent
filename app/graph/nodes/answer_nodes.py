@@ -26,7 +26,6 @@ from app.graph.nodes.common import NodeFn, traced_node
 from app.graph.state import GraphState
 from app.schemas.orchestrator import ExtractedEntities
 from app.services.map_reduce import consolidate_evidence
-from app.services.observability import record_sufficiency_verdict
 from app.services.output_reducer import reduce_agent_results
 from app.utils.logger import logger
 
@@ -87,8 +86,7 @@ def describe_final(update: dict[str, Any]) -> str:
 def make_sufficiency_node(agent: SufficiencyAgent) -> NodeFn:
     @traced_node(NODE_SUFFICIENCY, describe=describe_sufficiency)
     async def sufficiency_node(state: GraphState) -> dict[str, Any]:
-        verdict = await agent.check(state)
-        record_sufficiency_verdict(verdict, state.get("replan_count", 0))  # the agent logs the verdict
+        verdict = await agent.check(state)  # the agent logs and records the verdict (or that it is unverified)
         update: dict[str, Any] = {"sufficiency": verdict, "node_trace": [f"{NODE_SUFFICIENCY}:{verdict.verdict}"]}
         if verdict.verdict == VERDICT_REPLAN:
             update["refetch_history"] = verdict.refetch_instructions

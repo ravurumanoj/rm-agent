@@ -11,7 +11,7 @@ from app.agents.base import BaseAgent
 from app.agents.formatting import format_entities, format_metadata_block
 from app.components.react import ReActConfig, ReActRunner
 from app.config import settings
-from app.constants import AGENT_STATUS_NO_DATA, AGENT_STATUS_OK
+from app.constants import AGENT_STATUS_NO_DATA, AGENT_STATUS_OK, AGENT_TO_NODE
 from app.prompts.react import (
     AGENT_TASK_USER_TEMPLATE,
     CONVERSATION_BLOCK_TEMPLATE,
@@ -20,9 +20,9 @@ from app.prompts.react import (
     REACT_FORCE_FINAL_MESSAGE,
 )
 from app.schemas.agent_io import AgentResult, AgentTask
-from app.observability import record_error, start_agent_span, start_tool_span
+from app.observability import Attr, start_agent_span, start_tool_span
 from app.services.map_reduce import agent_goal, reduce_large_observations
-from app.services.observability import record_tool_call
+from app.services.observability import record_agent_result, record_tool_call
 from app.tools.base import ToolProvider
 from app.utils.logger import logger, preview
 
@@ -65,8 +65,7 @@ class ReActAgent(BaseAgent):
         )
         return AGENT_TASK_USER_TEMPLATE.format(
             objective=task.objective,
-            user_query=task.user_query,
-            rm_message=task.rm_message or task.user_query,
+            rm_message=task.rm_message,
             conversation_block=conversation,
             context_block=format_metadata_block(task.metadata),
             entities_block=format_entities(task.entities),
@@ -83,7 +82,7 @@ class ReActAgent(BaseAgent):
             reduce_observations=partial(
                 reduce_large_observations,
                 llm=self.llm,
-                goal=agent_goal(task.objective, task.user_query),
+                goal=agent_goal(task.objective),
                 context=format_entities(task.entities),
             ),
         )
@@ -97,7 +96,10 @@ class ReActAgent(BaseAgent):
             label, task.attempt, task.entities.portfolio_ids, preview(task.objective), preview(user_prompt),
         )
         with start_agent_span(
-            self.agent_id, input_value=task.objective, attributes={"app.agent.attempt": task.attempt}
+            self.agent_id,
+            input_value=task.objective,
+            graph_node=AGENT_TO_NODE.get(self.agent_id, self.agent_id),
+            attributes={"app.agent.attempt": task.attempt, Attr.GRAPH_STAGE: task.stage},
         ) as span:
             try:
                 runner = ReActRunner(
@@ -112,18 +114,23 @@ class ReActAgent(BaseAgent):
                     "[%s] run_crashed attempt=%s duration_ms=%s objective=%s",
                     label, task.attempt, int((time.perf_counter() - started) * 1000), preview(task.objective),
                 )
-                record_error(span, exc)
-                return build_agent_result(task, records=[], summary="", terminated_reason="crashed", error=str(exc))
+                result = build_agent_result(
+                    task, records=[], summary="", terminated_reason="crashed", error=f"{type(exc).__name__}: {exc}"
+                )
+                record_agent_result(span, result, exc=exc)
+                return result
 
-        result = build_agent_result(
-            task,
-            records=outcome.records,
-            summary=outcome.final_text,
-            terminated_reason=outcome.terminated_reason,
-            steps=outcome.steps,
-            iterations=outcome.iterations,
-            error=outcome.error,
-        )
+            result = build_agent_result(
+                task,
+                records=outcome.records,
+                summary=outcome.final_text,
+                terminated_reason=outcome.terminated_reason,
+                steps=outcome.steps,
+                iterations=outcome.iterations,
+                error=outcome.error,
+            )
+            record_agent_result(span, result)
+
         failed = [record.tool_name for record in result.tool_calls if not record.succeeded]
         healthy = result.status in (AGENT_STATUS_OK, AGENT_STATUS_NO_DATA) and not result.error
         (logger.info if healthy else logger.warning)(

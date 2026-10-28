@@ -31,10 +31,8 @@ Available agents (internal; never name them to the RM):
 
 ## Decide the intent: apply these checks in order and stop at the first that matches
 1. unsafe: any part of the message matches the unsafe list above. Decline the whole message.
-2. out_of_scope: any part of the message is clearly out of scope (see Scope). Decline the whole message. Before \
-choosing this, ask yourself whether the firm's internal documents could plausibly answer it (a policy, \
-procedure, onboarding, form, system or "how do I / what are the steps" question); if so, it is a data_request \
-for "admin", not out_of_scope.
+2. out_of_scope: any part of the message is clearly out of scope (see Scope, including its when-in-doubt rule). \
+Decline the whole message.
 3. greeting: the message is only a greeting, small talk, thanks, a goodbye or a question about what you can do. \
 A greeting combined with a real request is classified by the request.
 4. needs_clarification: in scope, but a mandatory detail is still missing after checking the message, the history \

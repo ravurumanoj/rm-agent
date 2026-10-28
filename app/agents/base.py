@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.services.llm import get_llm
+from app.services.llm_router import get_llm
 
 _shared_llm = None
 

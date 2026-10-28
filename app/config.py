@@ -35,6 +35,9 @@ class Settings(BaseSettings):
 
     LLM_PROVIDER: str = LLM_PROVIDER_UNIQUE
     LLM_FALLBACK_MODELS: str = ""
+    # Comma-separated models each provider serves (besides UNIQUE_MODEL_NAME / LLMAAS_MODEL); a model may be in both.
+    UNIQUE_MODELS: str = ""
+    LLMAAS_MODELS: str = ""
 
     # LLM-as-a-service (LLMaaS) endpoint exposing the OpenAI API; the client provides the key.
     LLMAAS_BASE_URL: str = ""
@@ -126,9 +129,7 @@ class Settings(BaseSettings):
 
     GRAPH_CHECKPOINTER_ENABLED: bool = True
 
-    ENTITLEMENTS_ENABLED: bool = True
     AUDIT_ENABLED: bool = True
-    GUARDRAILS_ENABLED: bool = True
     PII_MASKING_ENABLED: bool = False
 
     PHOENIX_ENABLED: bool = True
@@ -181,6 +182,10 @@ class Settings(BaseSettings):
     # "short" logs only the first/last LOG_PAYLOAD_EDGE_CHARS chars of prompts, replies and tool results; "full" logs all.
     LOG_PAYLOAD_MODE: str = LOG_PAYLOAD_MODE_SHORT
     LOG_PAYLOAD_EDGE_CHARS: int = 200
+
+    # Not used yet: app/services/entitlements.py and app/services/guardrails.py are unimplemented placeholders.
+    # ENTITLEMENTS_ENABLED: bool = True
+    # GUARDRAILS_ENABLED: bool = True
 
     @property
     def LOG_PAYLOAD_FULL(self) -> bool:
@@ -252,6 +257,12 @@ class Settings(BaseSettings):
         """Configured model name of the given (default: active) LLM provider."""
         active = (provider or self.LLM_PROVIDER).strip().lower()
         return (self.LLMAAS_MODEL if active == LLM_PROVIDER_OPENAI else self.UNIQUE_MODEL_NAME).strip()
+
+    def models_for(self, provider: str) -> list[str]:
+        """Models the provider serves: its configured model plus UNIQUE_MODELS / LLMAAS_MODELS."""
+        listed = self.LLMAAS_MODELS if provider == LLM_PROVIDER_OPENAI else self.UNIQUE_MODELS
+        names = [self.default_model_for(provider), *listed.split(",")]
+        return [name.strip() for name in names if name.strip()]
 
     def missing_llm_settings(self) -> list[str]:
         """Required settings of the active LLM provider that are not set."""

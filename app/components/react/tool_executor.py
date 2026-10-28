@@ -69,21 +69,24 @@ async def _run_one(
     semaphore: asyncio.Semaphore,
     config: ReActConfig,
 ) -> ExecutedCall:
-    """One tool call inside its tracing span when the host configured one (see ReActConfig.tool_span)."""
+    """One tool call inside its tracing span when the host configured one (see ReActConfig.tool_span).
+
+    The span opens once a parallel slot is free, so its latency is the call itself, not the wait for a slot.
+    """
     name = str(call.get("name") or "")
     args = call.get("args") if isinstance(call.get("args"), dict) else {}
-    with config.tool_span(name, args) if config.tool_span else nullcontext() as span:
-        executed = await _execute_one(call, tool_map, iteration, semaphore, config)
-        if config.on_tool_result is not None and executed.record is not None:
-            config.on_tool_result(span, executed.record)
-        return executed
+    async with semaphore:
+        with config.tool_span(name, args) if config.tool_span else nullcontext() as span:
+            executed = await _execute_one(call, tool_map, iteration, config)
+            if config.on_tool_result is not None and executed.record is not None:
+                config.on_tool_result(span, executed.record)
+            return executed
 
 
 async def _execute_one(
     call: dict[str, Any],
     tool_map: dict[str, BaseTool],
     iteration: int,
-    semaphore: asyncio.Semaphore,
     config: ReActConfig,
 ) -> ExecutedCall:
     name, call_id = str(call.get("name") or ""), str(call.get("id") or call.get("name") or "")
@@ -115,24 +118,23 @@ async def _execute_one(
         async def _call() -> ToolOutput:
             return coerce_tool_output(await asyncio.wait_for(tool.ainvoke(args), timeout))
 
-        async with semaphore:
-            try:
-                # Tools only read data, so retrying a transient failure is idempotent and safe.
-                output = await retry_async(
-                    _call,
-                    max_retries=config.max_retries,
-                    base_delay=config.retry_base_delay,
-                    max_delay=config.retry_max_delay,
-                    jitter_ratio=config.retry_jitter_ratio,
-                    retry_on_timeout=config.retry_on_timeout,
-                    default_kind=ErrorKind.NON_RETRYABLE,  # unknown tool errors: let the model fix its arguments
-                    label=f"tool {name}",
-                    stats=stats,
-                )
-            except Exception as exc:  # a tool failure must not abort the loop
-                kind = classify_error(exc, default=ErrorKind.NON_RETRYABLE)
-                error = f"Tool timed out after {timeout:.0f}s." if is_timeout(exc) else f"{type(exc).__name__}: {exc}"
-                error_kind = kind.value
+        try:
+            # Tools only read data, so retrying a transient failure is idempotent and safe.
+            output = await retry_async(
+                _call,
+                max_retries=config.max_retries,
+                base_delay=config.retry_base_delay,
+                max_delay=config.retry_max_delay,
+                jitter_ratio=config.retry_jitter_ratio,
+                retry_on_timeout=config.retry_on_timeout,
+                default_kind=ErrorKind.NON_RETRYABLE,  # unknown tool errors: let the model fix its arguments
+                label=f"tool {name}",
+                stats=stats,
+            )
+        except Exception as exc:  # a tool failure must not abort the loop
+            kind = classify_error(exc, default=ErrorKind.NON_RETRYABLE)
+            error = f"Tool timed out after {timeout:.0f}s." if is_timeout(exc) else f"{type(exc).__name__}: {exc}"
+            error_kind = kind.value
         if breaker is not None:
             # Only technical failures count against the server; a rejected request proves it is reachable.
             breaker.record_failure() if error_kind == ErrorKind.RETRYABLE.value else breaker.record_success()

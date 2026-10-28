@@ -15,8 +15,7 @@ class AgentTask(BaseModel):
     """Work order the orchestrator hands to a sub-agent."""
 
     agent: AgentId = Field(..., description="Agent that must execute the task.")
-    objective: str = Field(..., description="What the agent must retrieve or answer.")
-    user_query: str = Field(..., description="The RM's standalone question, for overall context.")
+    objective: str = Field(..., description="Standalone statement of what the agent must retrieve or answer.")
     rm_message: str = Field(default="", description="The RM's latest message exactly as typed, for context.")
     conversation_summary: str = Field(
         default="", description="Orchestrator's summary of the earlier conversation relevant to this request."
@@ -28,6 +27,7 @@ class AgentTask(BaseModel):
     )
     extra_instruction: str = Field(default="", description="Re-fetch or refinement guidance. Empty on first pass.")
     attempt: int = Field(default=1, ge=1, description="1 for the first pass, incremented on each re-fetch.")
+    stage: int = Field(default=1, ge=1, description="Plan stage the task runs in (1-based); a stage's tasks run in parallel.")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Request metadata such as client_id.")
 
 
@@ -47,6 +47,6 @@ class AgentResult(BaseModel):
     iterations: int = Field(default=0, description="Number of LLM reasoning iterations used.")
     terminated_reason: str = Field(
         default="",
-        description="Why the loop ended: final_answer, max_iterations, llm_error or single_call.",
+        description="Why the loop ended: final_answer, max_iterations, repeated_calls, llm_error or single_call.",
     )
     error: str | None = Field(default=None, description="Agent-level error, when the agent itself failed.")

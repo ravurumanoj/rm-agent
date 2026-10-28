@@ -18,6 +18,7 @@ from app.components.llm_call_context import llm_call
 from app.components.messages import extract_text
 from app.config import settings
 from app.constants import HISTORY_BLOCK_MAX_CONTENT_LEN
+from app.observability import SpanKind, SpanName, record_failure, record_output, set_attributes, start_span
 from app.prompts.history import HISTORY_SUMMARY_SYSTEM_PROMPT, HISTORY_SUMMARY_USER_TEMPLATE
 from app.services.unique_chat import UniqueChatContext
 from app.services.unique_sdk_client import configure_unique_sdk
@@ -103,28 +104,41 @@ async def summarize_turns(turns: list[Turn]) -> str:
 
 
 async def build_unique_history_block(ctx: UniqueChatContext) -> str:
-    """History block for the turn: older turns summarised, the latest turns verbatim. Empty on failure."""
+    """History block for the turn: older turns summarised, the latest turns verbatim. Empty on failure.
+
+    Traced as step.load_history (the summary's LLM call nests under it); a fallback marks the step failed.
+    """
     if not (settings.UNIQUE_HISTORY_ENABLED and ctx.chat_id):
         return ""
-    try:
-        turns = group_turns(await fetch_chat_messages(ctx))
-    except Exception:
-        logger.warning("[HISTORY] fetch_failed chat_id=%s; falling back to in-process history", ctx.chat_id, exc_info=True)
-        return ""
-    if not turns:
-        return ""
+    with start_span(SpanName.step("load_history"), kind=SpanKind.CHAIN) as span:
+        try:
+            turns = group_turns(await fetch_chat_messages(ctx))
+        except Exception as exc:
+            logger.warning("[HISTORY] fetch_failed chat_id=%s; falling back to in-process history", ctx.chat_id, exc_info=True)
+            record_failure(span, exc, where="chat history fetch failed; using the in-process history", kind="fallback")
+            return ""
+        set_attributes(span, {"app.history.turns": len(turns)})
+        if not turns:
+            return ""
 
-    raw_count = max(1, settings.HISTORY_RAW_TURNS)
-    recent, older = turns[-raw_count:], turns[:-raw_count][-max(0, settings.HISTORY_SUMMARY_MAX_TURNS):]
-    summary = await summarize_turns(older) if older else ""
+        raw_count = max(1, settings.HISTORY_RAW_TURNS)
+        recent, older = turns[-raw_count:], turns[:-raw_count][-max(0, settings.HISTORY_SUMMARY_MAX_TURNS):]
+        summary = await summarize_turns(older) if older else ""
 
-    sections = []
-    if summary:
-        sections.append(f"Summary of earlier conversation:\n{summary}")
-    sections.append("Recent conversation:\n" + "\n".join(_render(recent)))
-    block = "\n\n".join(sections) + "\n\n"
-    (logger.info if summary or not older else logger.warning)(
-        "[HISTORY] built chat_id=%s turns=%s recent=%s summarised=%s summary_ok=%s block_chars=%s",
-        ctx.chat_id, len(turns), len(recent), len(older), bool(summary) if older else "-", len(block),
-    )
-    return block
+        sections = []
+        if summary:
+            sections.append(f"Summary of earlier conversation:\n{summary}")
+        sections.append("Recent conversation:\n" + "\n".join(_render(recent)))
+        block = "\n\n".join(sections) + "\n\n"
+        (logger.info if summary or not older else logger.warning)(
+            "[HISTORY] built chat_id=%s turns=%s recent=%s summarised=%s summary_ok=%s block_chars=%s",
+            ctx.chat_id, len(turns), len(recent), len(older), bool(summary) if older else "-", len(block),
+        )
+        set_attributes(span, {"app.history.summarised_turns": len(older)})
+        record_output(span, block)
+        if older and not summary:
+            record_failure(
+                span, "no summary of the older turns", where="history summary failed; using the recent turns only",
+                kind="fallback",
+            )
+        return block

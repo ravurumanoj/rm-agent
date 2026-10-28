@@ -3,38 +3,31 @@ from __future__ import annotations
 import time
 
 from app.config import settings
-from app.observability import SpanKind, SpanName, set_attributes, start_span
 from app.services.unique_sdk_client import configure_unique_sdk
 
 
 def verify_webhook_signature(payload: bytes, sig_header: str, timestamp: str) -> bool:
-    """Verify Unique webhook signature when explicitly enabled.
+    """Verify Unique webhook signature when explicitly enabled (not traced: HTTP plumbing; the caller logs it).
 
     Returns:
         True if signature verification executed, False if skipped.
     """
-    with start_span(
-        SpanName.step("verify_webhook_signature"),
-        kind=SpanKind.CHAIN,
-        attributes={"app.signature_verification_enabled": settings.UNIQUE_WEBHOOK_VERIFY_SIGNATURE},
-    ) as span:
-        if not settings.UNIQUE_WEBHOOK_VERIFY_SIGNATURE:
-            set_attributes(span, {"app.signature_verification_skipped": True})
-            return False
+    if not settings.UNIQUE_WEBHOOK_VERIFY_SIGNATURE:
+        return False
 
-        secret = (settings.UNIQUE_WEBHOOK_ENDPOINT_SECRET or "").strip()
-        if not secret:
-            raise RuntimeError("UNIQUE_WEBHOOK_VERIFY_SIGNATURE=true but UNIQUE_WEBHOOK_ENDPOINT_SECRET is empty")
+    secret = (settings.UNIQUE_WEBHOOK_ENDPOINT_SECRET or "").strip()
+    if not secret:
+        raise RuntimeError("UNIQUE_WEBHOOK_VERIFY_SIGNATURE=true but UNIQUE_WEBHOOK_ENDPOINT_SECRET is empty")
 
-        sdk = configure_unique_sdk()
-        webhook_api = getattr(sdk, "Webhook", None)
-        construct_event = getattr(webhook_api, "construct_event", None) if webhook_api else None
-        if not callable(construct_event):
-            raise RuntimeError("unique_sdk.Webhook.construct_event is unavailable in installed SDK")
+    sdk = configure_unique_sdk()
+    webhook_api = getattr(sdk, "Webhook", None)
+    construct_event = getattr(webhook_api, "construct_event", None) if webhook_api else None
+    if not callable(construct_event):
+        raise RuntimeError("unique_sdk.Webhook.construct_event is unavailable in installed SDK")
 
-        # An invalid signature raises out of the span, which marks it as failed.
-        construct_event(payload, sig_header, timestamp, secret)
-        return True
+    # An invalid signature raises; the webhook answers 400.
+    construct_event(payload, sig_header, timestamp, secret)
+    return True
 
 
 _DEDUP_TTL_SECONDS = 600.0

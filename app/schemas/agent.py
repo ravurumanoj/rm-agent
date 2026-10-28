@@ -31,29 +31,6 @@ class EvaluationItem(BaseModel):
     details: dict = Field(default_factory=dict)
 
 
-class UniqueModelItem(BaseModel):
-    model: str
-    provider: str = "unique_ai"
-    raw: dict = Field(default_factory=dict)
-
-
-class UniqueModelListResponse(BaseModel):
-    models: list[UniqueModelItem] = Field(default_factory=list)
-
-
-class UniqueModelTestRequest(BaseModel):
-    model: str = Field(..., min_length=1, description="Unique model name to test.")
-    query: str = Field(..., min_length=1, description="Prompt/query to send to the model.")
-    company_id: str = Field(default="", description="Optional runtime override for tenant identity.")
-    user_id: str = Field(default="", description="Optional runtime override for user identity.")
-
-
-class UniqueModelTestResponse(BaseModel):
-    model: str
-    query: str
-    response: str
-
-
 class ChatResponse(BaseModel):
     """Final agent reply for a turn."""
 
@@ -61,6 +38,39 @@ class ChatResponse(BaseModel):
     reply: str
     citations: list[CitationItem] = Field(default_factory=list)
     evaluations: list[EvaluationItem] = Field(default_factory=list)
+
+
+class ProviderModel(BaseModel):
+    model: str = Field(..., description="Model name.")
+    configured: bool = Field(..., description="True when set in this app's config (model, model list or fallbacks).")
+
+
+class ProviderModels(BaseModel):
+    provider: str = Field(..., description="unique_ai or openai (LLMaaS).")
+    source: str = Field(..., description="unique_platform: live list from Unique; config: this app's config.")
+    models: list[ProviderModel] = Field(default_factory=list, description="Configured models first.")
+    error: str | None = Field(default=None, description="Why the live list could not be read, if it failed.")
+
+
+class ModelsResponse(BaseModel):
+    default_provider: str = Field(..., description="LLM_PROVIDER: the provider the agents use.")
+    default_model: str = Field(..., description="The agents' primary model.")
+    providers: list[ProviderModels] = Field(default_factory=list)
+
+
+class LLMQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="Prompt to send to the model.")
+    model: str | None = Field(default=None, description="Model to test. Defaults to the provider's configured model.")
+    provider: str | None = Field(
+        default=None, description="unique_ai or openai. Defaults to the provider that lists the model in config."
+    )
+
+
+class LLMQueryResponse(BaseModel):
+    response: str = Field(..., description="The model's reply.")
+    model: str = Field(..., description="Model that answered.")
+    provider: str = Field(..., description="Provider that served the call.")
+    latency_ms: int = Field(..., description="Round-trip time of the call.")
 
 
 class WebhookUserMessage(BaseModel):

@@ -11,6 +11,7 @@ app.token_count.estimated so real and estimated costs can be told apart.
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from functools import lru_cache
 from typing import Any, Iterator, Mapping, Sequence
@@ -39,16 +40,33 @@ def message_text(content: Any) -> str:
     return str(content or "")
 
 
-def to_openinference_messages(messages: Sequence[Any]) -> list[dict[str, str]]:
-    """LangChain messages (or {"role", "content"} dicts) as OpenInference input/output messages."""
-    converted = []
+def to_openinference_messages(messages: Sequence[Any]) -> list[dict[str, Any]]:
+    """LangChain messages (or {"role", "content"} dicts) as OpenInference messages, with the tool calls a reply
+    asked for and the tool call id a tool result answers."""
+    converted: list[dict[str, Any]] = []
     for message in messages:
         if isinstance(message, Mapping):
             converted.append({"role": str(message.get("role", "user")), "content": message_text(message.get("content"))})
-        else:
-            role = _ROLE_BY_TYPE.get(getattr(message, "type", ""), "user")
-            converted.append({"role": role, "content": message_text(getattr(message, "content", ""))})
+            continue
+        item: dict[str, Any] = {
+            "role": _ROLE_BY_TYPE.get(getattr(message, "type", ""), "user"),
+            "content": message_text(getattr(message, "content", "")),
+        }
+        if getattr(message, "tool_calls", None):
+            item["tool_calls"] = to_openinference_tool_calls(message.tool_calls)
+        if getattr(message, "tool_call_id", None):
+            item["tool_call_id"] = str(message.tool_call_id)
+        converted.append(item)
     return converted
+
+
+def to_openinference_tool_calls(tool_calls: Sequence[Any]) -> list[dict[str, Any]]:
+    """LangChain tool calls ({"id", "name", "args"}) in the OpenInference shape."""
+    return [
+        {"id": call.get("id"), "function": {"name": call.get("name"), "arguments": call.get("args") or {}}}
+        for call in tool_calls
+        if isinstance(call, Mapping)
+    ]
 
 
 def normalize_token_usage(usage: Any) -> dict[str, int] | None:
@@ -113,15 +131,20 @@ def record_llm_response(
     output: Any,
     usage: Mapping[str, int] | None = None,
     messages: Sequence[Any] | None = None,
+    tool_calls: Sequence[Any] | None = None,
 ) -> None:
-    """Response text and token counts; with no usage but the prompt messages given, counts are estimated."""
+    """Response text, the tool calls it asked for, and token counts; with no usage but the prompt messages given,
+    counts are estimated. A reply that only calls tools has no text, so its output is the calls."""
     text = message_text(output)
+    calls = to_openinference_tool_calls(tool_calls or [])
+    completion = text or (json.dumps(calls, default=str) if calls else "")
     estimated = usage is None and messages is not None
-    counts = dict(usage) if usage else (estimate_token_usage(messages, text) if estimated else None)
+    counts = dict(usage) if usage else (estimate_token_usage(messages, completion) if estimated else None)
 
-    record_output(span, text)
+    record_output(span, text or ({"tool_calls": calls} if calls else text))
     if capture_content():
-        set_attributes(span, get_llm_attributes(output_messages=[{"role": "assistant", "content": text}]))
+        reply = {"role": "assistant", "content": text, **({"tool_calls": calls} if calls else {})}
+        set_attributes(span, get_llm_attributes(output_messages=[reply]))
     if counts:
         set_attributes(span, {**get_llm_token_count_attributes(counts), Attr.TOKENS_ESTIMATED: estimated})
 

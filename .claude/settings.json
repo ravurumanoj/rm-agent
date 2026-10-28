@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(head -c 1500 update_rm_agent.py)",
+      "Bash(head -c 800 replicate_rm_agent.py)"
+    ]
+  }
+}

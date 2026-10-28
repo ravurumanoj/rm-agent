@@ -11,6 +11,10 @@ __pycache__/
 docs/
 tests/
 
+# Unimplemented placeholders, kept locally only (not imported anywhere)
+app/services/entitlements.py
+app/services/guardrails.py
+
 
 # Distribution / packaging
 .Python

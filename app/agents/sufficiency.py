@@ -10,9 +10,11 @@ from app.components.structured_output import invoke_structured, schema_instructi
 from app.config import settings
 from app.constants import VERDICT_PARTIAL, VERDICT_REPLAN, VERDICT_SUFFICIENT
 from app.graph.state import GraphState
+from app.observability import record_current_failure
 from app.prompts.sufficiency import SUFFICIENCY_SYSTEM_PROMPT, SUFFICIENCY_USER_TEMPLATE
 from app.schemas.orchestrator import ExtractedEntities
 from app.schemas.sufficiency import SufficiencyVerdict
+from app.services.observability import record_sufficiency_verdict
 from app.utils.logger import logger, preview
 
 
@@ -44,14 +46,20 @@ class SufficiencyAgent(BaseAgent):
                 label="sufficiency",
                 max_attempts=settings.AGENT_STRUCTURED_OUTPUT_ATTEMPTS,
             )
-        except Exception:
+        except Exception as exc:
             # Degrade instead of failing the turn: the final agent still answers only from the evidence.
             logger.warning(
                 "[SUFF] check_failed replans=%s evidence_agents=%s; passing the evidence on unverified",
                 state.get("replan_count", 0), list((state.get("evidence") or {}).keys()), exc_info=True,
             )
-            return unverified_verdict()
+            verdict = unverified_verdict()
+            record_sufficiency_verdict(verdict, state.get("replan_count", 0), unverified=True)
+            record_current_failure(
+                exc, where="sufficiency check could not run; evidence passed on unverified", kind="fallback"
+            )
+            return verdict
         verdict = enforce_replan_budget(verdict, state.get("replan_count", 0))
+        record_sufficiency_verdict(verdict, state.get("replan_count", 0))
         logger.info(
             "[SUFF] verdict=%s replans=%s/%s inadequate=%s grounding_issues=%s conflicts=%s guardrail_issues=%s "
             "refetch=%s data_gaps=%s ask_rm=%s reasoning=%s",

@@ -46,7 +46,6 @@ def build_stage_tasks(state: GraphState) -> list[AgentTask]:
     )
     attempt = state.get("replan_count", 0) + 1
     entities = state.get("entities") or ExtractedEntities()
-    query = state.get("resolved_query") or state.get("user_message", "")
     logger.debug(
         "[GRAPH] stage_tasks stage=%s agents=%s attempt=%s portfolio_ids=%s handoff_from=%s handoff_chars=%s",
         stage_index + 1, sorted(running), attempt, entities.portfolio_ids,
@@ -57,13 +56,13 @@ def build_stage_tasks(state: GraphState) -> list[AgentTask]:
         AgentTask(
             agent=step.agent,
             objective=step.objective,
-            user_query=query,
             rm_message=state.get("user_message", ""),
             conversation_summary=state.get("conversation_summary", ""),
             entities=entities,
             handoff_context=handoff,
             extra_instruction=step.extra_instruction,
             attempt=attempt,
+            stage=stage_index + 1,
             metadata=state.get("metadata") or {},
         )
         for step in stage.steps

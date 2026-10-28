@@ -37,8 +37,7 @@ are added to the known ones (for example known 1111, 2222 plus the answer "3333 
 the RM says to replace or correct them. Keep expected_portfolio_count unless the RM changes it.
 4. If the answer now covers every mandatory detail, set intent to data_request and build a plan.
 5. If the RM changed topic instead of answering, treat the new message as a fresh request and apply the same \
-checks: unsafe, out_of_scope (including a mix of in-scope and out-of-scope questions), greeting, \
-needs_clarification or data_request.
+checks: unsafe, out_of_scope, greeting, needs_clarification or data_request.
 6. If something mandatory is still missing, set intent to needs_clarification and ask only for what is still \
 missing, naming what you have received so far. Never repeat the previous question word for word.
 

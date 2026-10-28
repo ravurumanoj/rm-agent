@@ -8,6 +8,8 @@ import httpx
 from app.config import settings
 from app.utils.logger import logger, preview
 
+_MAX_CONNECTION_AGE_SECONDS = 540
+
 
 def _parse_sse_event(event_data: str) -> dict | None:
     """Parse a single SSE event string into a dictionary."""
@@ -68,6 +70,7 @@ async def get_sse_stream() -> AsyncIterator[dict]:
     }
 
     while True:
+        connection_start_time: float | None = None
         try:
             # trust_env=True picks up the proxy and CA bundle set at startup.
             async with httpx.AsyncClient(
@@ -92,8 +95,17 @@ async def get_sse_stream() -> AsyncIterator[dict]:
                     )
 
                     buffer = ""
+                    chunks = response.aiter_text()
+                    # Reconnect after nine minutes, before the documented ten-minute connection timeout; the
+                    # deadline holds even when no data arrives.
+                    deadline = connection_start_time + _MAX_CONNECTION_AGE_SECONDS
 
-                    async for chunk in response.aiter_text():
+                    while (remaining := deadline - time.monotonic()) > 0:
+                        try:
+                            chunk = await asyncio.wait_for(anext(chunks), remaining)
+                        except (StopAsyncIteration, TimeoutError):
+                            break
+
                         buffer += chunk
 
                         events, buffer = _process_buffer(buffer)
@@ -101,15 +113,9 @@ async def get_sse_stream() -> AsyncIterator[dict]:
                         for event in events:
                             yield event
 
-                        # Reconnect after nine minutes, before the
-                        # documented ten-minute connection timeout.
-                        connection_age = (
-                            time.monotonic() - connection_start_time
-                        )
-
-                        if connection_age >= 540:
-                            logger.info("[SSE] reconnecting age_s=%s (before the 10-minute server timeout)", int(connection_age))
-                            break
+                    connection_age = time.monotonic() - connection_start_time
+                    if connection_age >= _MAX_CONNECTION_AGE_SECONDS:
+                        logger.info("[SSE] reconnecting age_s=%s (before the 10-minute server timeout)", int(connection_age))
 
             # Avoid a tight reconnect loop if the server closes immediately.
             await asyncio.sleep(1)
@@ -117,6 +123,12 @@ async def get_sse_stream() -> AsyncIterator[dict]:
         except asyncio.CancelledError:
             logger.info("[SSE] stream_cancelled")
             raise
+
+        except (httpx.RemoteProtocolError, httpx.ReadError) as e:
+            # The server or a proxy closed the long-lived stream: expected, so reconnect quickly.
+            age = int(time.monotonic() - connection_start_time) if connection_start_time is not None else "-"
+            logger.info("[SSE] peer_closed age_s=%s error=%s: %s; reconnecting in 1s", age, type(e).__name__, e)
+            await asyncio.sleep(1)
 
         except httpx.HTTPStatusError as e:
             logger.warning("[SSE] connect_rejected status=%s url=%s; retrying in 5s", e.response.status_code, settings.SSE_URL)

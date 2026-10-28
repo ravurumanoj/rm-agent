@@ -25,6 +25,8 @@ returned adequate data must not run again; their findings are passed along autom
 re-fetch instruction into extra_instruction.
 - Do not repeat an approach that already failed: use different tools, narrower or broader scope, or different \
 wording than the previous attempt.
+- An agent that runs again replaces its earlier result. For "admin", restate the full question and name what \
+the previous answer lacked, using what it did return as context, so the new answer is complete on its own.
 
 """
     + PLAN_BUILDING_RULES

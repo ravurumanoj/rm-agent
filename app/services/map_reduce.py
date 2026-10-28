@@ -96,12 +96,10 @@ async def reduce_large_observations(
     return result
 
 
-def agent_goal(objective: str, user_query: str) -> str:
+def agent_goal(objective: str) -> str:
     return (
         f"Agent objective: {objective}\n"
-        f"RM question it serves: {user_query}\n"
-        "Keep every value, item and detail this objective and question need, including inputs for any "
-        "calculation they imply."
+        "Keep every value, item and detail this objective needs, including inputs for any calculation it implies."
     )
 
 

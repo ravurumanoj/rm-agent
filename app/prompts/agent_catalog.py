@@ -29,8 +29,7 @@ and citations to the documents.
 teams); document checklists for account opening and onboarding by client or account type; recertification and \
 periodic review; KYC, AML and compliance procedures (what to do, not decisions); internal forms, systems and \
 tools, including how to use them and how to resolve an issue or error the RM runs into; who to contact or \
-escalate to. Questions may be indirect, vague or framed as a problem ("my client's onboarding is stuck, what \
-now?", "look into our internal docs for ...").
+escalate to. Questions are often indirect or vague, or describe a problem instead of naming a document.
   Needs: no client data. Never ask for a client or portfolio for this agent.
   Never: KYC, risk, AML or sanctions approvals or any other compliance decision on a specific case.""",
 }

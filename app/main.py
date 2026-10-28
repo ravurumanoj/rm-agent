@@ -22,7 +22,6 @@ from app.constants import (
 )
 from app.db.session import init_db, ping_db
 from app.routes.agent import router as agent_router
-from app.routes.llm import router as llm_router
 from app.routes.webhook import router as webhook_router
 from app.services.network import configure_network_environment
 from app.services.observability import configure_observability, shutdown_observability
@@ -188,7 +187,6 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(agent_router)
-    app.include_router(llm_router)
     app.include_router(webhook_router)
 
     @app.exception_handler(Exception)

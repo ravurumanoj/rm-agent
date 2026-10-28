@@ -14,7 +14,7 @@ from app.schemas.internal import TurnResult
 from app.schemas.orchestrator import PendingClarification
 from app.services.checkpointer import in_memory_checkpointer
 from app.services.evaluation import create_default_evaluation_manager
-from app.observability import SpanKind, SpanName, query_context, start_span
+from app.observability import query_context, set_current_attributes
 from app.services.observability import audit_query, record_query_outcome
 from app.utils.logger import logger, preview
 
@@ -95,16 +95,13 @@ async def run_turn(
 ) -> TurnResult:
     """Run one RM message through the orchestrator graph and return reply, citations and evaluations.
 
-    One query = one trace: the "query" span is the root every node, agent, tool and LLM span nests under, and
-    the correlation id bound here is on all of them and on every log line.
+    One query = one trace: the caller (webhook, /agent/chat, /agent/stream) opens the root span with start_trace,
+    so it also covers the work around the turn (history load, reply delivery). The outcome and the reply are
+    recorded on that span; the correlation id bound here is on every span and log line.
     """
     user_id = str((metadata or {}).get("user_id") or "")
-    with query_context(session_id=session_id, user_id=user_id), start_span(
-        SpanName.QUERY,
-        kind=SpanKind.CHAIN,
-        input_value=message,
-        attributes={"app.query.history_present": bool(history_block.strip())},
-    ) as span:
+    with query_context(session_id=session_id, user_id=user_id):
+        set_current_attributes({"app.query.history_present": bool(history_block.strip())})
         started = time.perf_counter()
         logger.debug(
             "[GRAPH] turn_input session_id=%s message=%s metadata=%s history=%s",
@@ -144,11 +141,11 @@ async def run_turn(
                 [item["name"] for item in evaluations if not item.get("passed", True)],
                 final_state.get("node_trace", []), preview(result.reply),
             )
-            signals = record_query_outcome(span, final_state)
+            signals = record_query_outcome(final_state)
             audit_query(question=message, final_state=final_state, signals=signals)
             return result
         except Exception:
-            # The exception propagating out of the span marks the query span as failed.
+            # The caller's root span records the failure (with where it happened) when the exception reaches it.
             logger.exception(
                 "[GRAPH] turn_failed session_id=%s duration_ms=%s message=%s",
                 session_id, int((time.perf_counter() - started) * 1000), preview(message),

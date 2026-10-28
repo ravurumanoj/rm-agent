@@ -1,7 +1,7 @@
 """Naming conventions for every span, attribute and log field, so traces read the same in any project.
 
 Span names are "<category>.<name>", lowercase with underscores:
-    query                      root span of one user query (one trace per query)
+    query                      root span of one user query (always a new trace: one trace per query)
     http.<route>               an inbound HTTP request
     step.<name>                an internal step outside the graph, e.g. step.load_history
     node.<graph_node>          one step of the workflow graph, e.g. node.sufficiency_check
@@ -69,9 +69,14 @@ class Attr:
     USER_ID = SpanAttributes.USER_ID
     METADATA = SpanAttributes.METADATA
 
-    # Workflow position
+    # Workflow position. Arize AX builds the agent graph from the OpenInference graph.node.* keys and agent.name.
     GRAPH_NODE = "app.graph_node"
-    AGENT_NAME = "app.agent"
+    GRAPH_NODE_ID = SpanAttributes.GRAPH_NODE_ID
+    GRAPH_NODE_NAME = SpanAttributes.GRAPH_NODE_NAME
+    GRAPH_NODE_PARENT_ID = SpanAttributes.GRAPH_NODE_PARENT_ID
+    GRAPH_STEP = "app.graph.step"  # start order of the graph nodes within the query (the root is 0)
+    GRAPH_STAGE = "app.graph.stage"  # plan stage an agent ran in; agents of one stage run in parallel
+    AGENT_NAME = SpanAttributes.AGENT_NAME
     LLM_CALL = "app.llm_call"
 
     # Agent decisions
@@ -83,7 +88,11 @@ class Attr:
     REPLAN_COUNT = "app.decision.replan_count"
 
     # Reliability
+    ERROR_TYPE = "error.type"
     ERROR_KIND = "app.error.kind"
+    ERROR_WHERE = "app.error.where"
+    ERROR_HTTP_STATUS = "http.response.status_code"
+    ERROR_HTTP_BODY = "app.error.http_body"
     RETRY_ATTEMPTS = "app.retry.attempts"
     STATUS = "app.status"
 

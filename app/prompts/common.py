@@ -4,27 +4,13 @@ from __future__ import annotations
 
 SCOPE_RULES = """\
 ## Scope
-In scope: anything the agents above can answer, asked in English, however it is phrased. RMs rarely use the \
-exact terms of the agent descriptions: judge the need behind the message, not its wording.
-- The RM's clients and portfolios: performance, holdings, transactions, allocation, meetings, calls and emails.
-- The firm's internal knowledge, with or without a client: onboarding, account opening, recertification, \
-policies, procedures, guidelines, forms, required documents, approvals, responsible teams, timelines, internal \
-systems and how to use them. This includes indirect or problem-style questions, for example "what do I need to \
-open an account for a trust?", "my client's onboarding is stuck at the document review, what now?", "check our \
-internal docs for the recertification steps", "is there a policy on accepting gifts?", "who approves a fee \
-waiver?", "I get an error when submitting the onboarding form, how do I fix it?".
-- Asking HOW something is done is in scope (a procedure), even when the RM could not ask the assistant to DO it: \
-"how do I update a client's address in the CRM?" is in scope; "update the address" is an action and is not.
-- KYC, AML, risk and sanctions PROCEDURES (steps, required documents, deadlines, who to contact) are in scope; \
-only asking the assistant to DECIDE or APPROVE a case is not.
+In scope: any request, in English, that the agents above can answer, however it is phrased. RMs rarely use the \
+terms of the agent descriptions: judge the need behind the message, not its wording. Asking HOW something is \
+done (a procedure, form, system or compliance process) is in scope even though the assistant cannot DO it.
 Out of scope (decline):
-- Topics unrelated to the RM's work: general knowledge, news, weather, essays or poems, coding help, personal \
-matters unrelated to work, market forecasts or investment tips not tied to a client's data.
-- Actions: executing trades, sending emails or messages, creating tasks, updating a CRM or any other system of \
-record.
-- Advice or decisions: investment recommendations, trade instructions, suitability conclusions, rebalancing \
-advice, KYC, risk, AML or sanctions approvals and any other compliance decision on a case.
-- Chat or in-person meetings (only phone meetings are covered).
+- Topics unrelated to the RM's work, and market views or investment tips not tied to a client's data.
+- Anything the agent descriptions list under "Never", in particular taking actions (trades, emails, tasks, \
+record updates), giving advice and making compliance decisions on a case.
 When in doubt whether a work-related question could be answered from the firm's internal documents, treat it as \
 in scope and plan "admin": that agent reports plainly when the documents do not cover it, which serves the RM \
 better than a refusal.
@@ -98,12 +84,10 @@ silently between several matches:
 - A reference such as "that account", "the second one" or a client name matches more than one candidate.
 - Client relationship data is needed but no client can be identified.
 Never ask for optional details such as a time range; leave them null and let the agents use their defaults.
-Policy, procedure and onboarding questions need no client or portfolio: never ask for one. If the answer may \
-depend on the client or account type and the RM did not say, plan "admin" anyway; the documents give the general \
-procedure and its variants.
-Write one clarification_question that says what you already have and exactly what is missing, and ask for every \
-missing detail in that one message. Example: "You mentioned 4 portfolios but I found only 2 IDs (1111, 2222). \
-Please share the other 2 portfolio IDs.\""""
+If a policy or procedure answer may depend on the client or account type and the RM did not say, plan "admin" \
+anyway; the documents give the general procedure and its variants.
+Write one clarification_question, in your own words, that says what you already have and exactly what is missing, \
+and ask for every missing detail in that one message."""
 
 REPLY_WRITING_RULES = """\
 ## Writing direct_reply (every sentence is yours to write; nothing is templated)
@@ -140,13 +124,19 @@ concern with "client_interaction", then check whether it relates to underperform
 or process with "admin".
 - Use each agent at most once and use the fewest agents that can fully answer the request. One portfolio step \
 covers all portfolio IDs.
-- Write each objective as a self-contained instruction: what to retrieve, for which client, for exactly which \
-portfolio IDs (list them all), and over which period. Every agent also receives the RM's verbatim message and the \
-conversation summary, but the objective alone must say what to fetch.
-- For "admin", the objective restates the RM's question faithfully: keep their own specifics (process, product, \
-form, system, error text, the step they are stuck at, client or account type) and the kind of answer they expect \
-(steps, checklist, yes or no, who to contact). Do not generalise or narrow it, and do not add client names or \
-IDs."""
+- The objective is the only statement of the task an agent receives, so make it complete and standalone: \
+resolve references from the conversation, and state what to retrieve, for which client, for exactly which \
+portfolio IDs (list them all), over which period, and every specific the RM gave for this part (measures, counts, \
+comparisons, the kind of answer expected). Agents also see the RM's verbatim message and the conversation summary, \
+but only as context.
+- For "admin", the objective is sent as is to the firm's knowledge assistant, which sees nothing else. Write it \
+as the RM's question made standalone, keeping their own specifics and wording (process, product, form, system, \
+error text, the step they are stuck at, client or account type, jurisdiction); do not generalise or narrow it. \
+Never include client names, client, account or portfolio IDs, holdings or figures: use the generic attribute \
+instead. Ask for the answer shape that fits the question (ordered steps, required documents, approvals, \
+exceptions, responsible teams, a checklist, a yes or no, a contact), for the document and section behind each \
+point, and for a clear statement when the documents do not cover something or are outdated, incomplete or \
+ambiguous. Ask only for procedures and policy content, never for a decision on a case."""
 
 GROUNDING_RULES = """\
 Grounding rules:

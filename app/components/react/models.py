@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 TERMINATED_FINAL_ANSWER = "final_answer"
 TERMINATED_MAX_ITERATIONS = "max_iterations"
+TERMINATED_REPEATED_CALLS = "repeated_calls"
 TERMINATED_LLM_ERROR = "llm_error"
 
 

@@ -1,4 +1,8 @@
-"""Execution nodes: stage dispatch, the three agent nodes and the stage join."""
+"""Execution nodes: stage dispatch, the three agent nodes and the stage join.
+
+None of them opens a node span: dispatch and join only do stage bookkeeping (no I/O, LLM or tool call), and each
+agent opens its own AGENT span, which is the agent's node in the trace and the agent graph.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ class SupportsRun(Protocol):
     async def run(self, task: AgentTask) -> AgentResult: ...
 
 
-@traced_node(NODE_STAGE_DISPATCH)
+@traced_node(NODE_STAGE_DISPATCH, span=False)
 async def stage_dispatch_node(state: GraphState) -> dict[str, Any]:
     """Marks a stage boundary; the fan-out to agent nodes happens on the outgoing conditional edge."""
     stage = state.get("current_stage", 0)
@@ -54,7 +58,7 @@ def describe_agent_result(update: dict[str, Any]) -> str:
 
 
 def make_agent_node(agent: SupportsRun, node_name: str) -> NodeFn:
-    @traced_node(node_name, describe=describe_agent_result)
+    @traced_node(node_name, describe=describe_agent_result, span=False)
     async def agent_node(payload: AgentNodeInput) -> dict[str, Any]:
         # The agent logs its own run (objective, tool calls, status); this node only records the result.
         result = await agent.run(payload["task"])
@@ -66,7 +70,7 @@ def make_agent_node(agent: SupportsRun, node_name: str) -> NodeFn:
     return agent_node
 
 
-@traced_node(NODE_STAGE_JOIN)
+@traced_node(NODE_STAGE_JOIN, span=False)
 async def stage_join_node(state: GraphState) -> dict[str, Any]:
     """Runs once all agents of the stage have returned, then advances to the next stage."""
     next_stage = state.get("current_stage", 0) + 1

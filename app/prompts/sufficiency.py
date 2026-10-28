@@ -24,8 +24,8 @@ section, or the call failed or returned nothing.
   - client_interaction: the date and the meeting, transcript or email behind each point;
   - admin: an answer from the firm's documents that addresses the RM's question, with citations; when the RM \
 asked how to do something, the steps. Approvals, exceptions, required documents or responsible teams that the \
-documents do not mention are not a reason for inadequate or replan: list each as a data gap ("not specified in \
-the documents") so the final answer says so. An answer saying the documents do not cover the question is \
+documents do not mention are not a reason for inadequate or replan: list each as a data gap saying the documents \
+do not specify it, so the final answer says so. An answer saying the documents do not cover the question is \
 adequate: it is the answer. Content the answer itself calls outdated, incomplete or ambiguous goes in \
 guardrail_issues with the reason "label as outdated / incomplete / ambiguous", so the final answer keeps it \
 with that label.

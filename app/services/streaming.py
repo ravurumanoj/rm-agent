@@ -5,7 +5,7 @@ import time
 from typing import Any, AsyncGenerator
 
 from app.graph.runner import run_turn
-from app.observability import Attr, SpanKind, SpanName, record_error, set_attributes, start_span
+from app.observability import Attr, record_failure, set_attributes, start_trace
 from app.utils.logger import logger, preview
 
 
@@ -27,12 +27,16 @@ async def stream_chat_events(
     metadata: dict[str, Any] | None = None,
     tool_outputs: list[dict[str, Any]] | None = None,
 ) -> AsyncGenerator[str, None]:
-    """Yield SSE events compatible with wealth app local UI stream contract."""
-    with start_span(
-        SpanName.step("stream_events"),
-        kind=SpanKind.CHAIN,
+    """Yield SSE events compatible with wealth app local UI stream contract.
+
+    The root span of the turn's trace is opened here, inside the stream, so it lasts as long as the stream does.
+    """
+    with start_trace(
+        input_value=message,
         attributes={
             Attr.SESSION_ID: session_id,
+            Attr.USER_ID: str((metadata or {}).get("user_id") or "") or None,
+            "app.entrypoint": "/agent/stream",
             "app.tool_output_count": len(tool_outputs or []),
         },
     ) as span:
@@ -53,7 +57,7 @@ async def stream_chat_events(
                 "[STREAM] failed session_id=%s duration_ms=%s message=%s error=%s",
                 session_id, int((time.perf_counter() - started) * 1000), preview(message), exc, exc_info=True,
             )
-            record_error(span, exc)  # handled: reported to the client as an error event
+            record_failure(span, exc, where="turn failed; the stream sends an error event")  # handled
             set_attributes(span, {"app.stream.success": False})
             yield sse_data({"type": "error", "message": str(exc)})
             return

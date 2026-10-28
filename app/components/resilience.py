@@ -145,8 +145,12 @@ async def retry_async(
     default_kind: ErrorKind = ErrorKind.RETRYABLE,
     retry_on_timeout: bool = True,
     stats: RetryStats | None = None,
+    on_retry: Callable[[int, BaseException, float], None] | None = None,
 ) -> T:
-    """Run fn, retrying only retryable failures with back-off and jitter; non-retryable ones fail fast."""
+    """Run fn, retrying only retryable failures with back-off and jitter; non-retryable ones fail fast.
+
+    on_retry(attempt, error, delay) runs before each wait, e.g. to add the failed attempt to a tracing span.
+    """
     stats = stats or RetryStats()
     for attempt in range(max(0, max_retries) + 1):
         stats.attempts = attempt + 1
@@ -164,6 +168,8 @@ async def retry_async(
                 "[RETRY] %s attempt=%s/%s kind=%s error=%s: %s; retrying in %.1fs",
                 label, attempt + 1, max_retries + 1, kind.value, type(exc).__name__, exc, delay,
             )
+            if on_retry is not None:
+                on_retry(attempt + 1, exc, delay)
             await _sleep(delay)
     raise RuntimeError(f"{label}: retry loop ended without a result")  # unreachable
 
