@@ -3,7 +3,7 @@
 
 Put this file in the project root (the folder that holds app/ and .env), then run:
     python update_rm_agent.py                  # create/overwrite the files below
-    python update_rm_agent.py --dry-run        # only list what would change
+    python update_rm_agent.py --dry-run        # only list what would change 
     python update_rm_agent.py --target PATH    # write into another project root
 
 Only the files embedded below are written; nothing is deleted. .env, .env.example and app/config.py are never
